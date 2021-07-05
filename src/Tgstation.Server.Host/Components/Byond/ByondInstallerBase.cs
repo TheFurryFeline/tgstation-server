@@ -1,8 +1,10 @@
-using Microsoft.Extensions.Logging;
-using System;
+﻿using System;
 using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
+
+using Microsoft.Extensions.Logging;
+
 using Tgstation.Server.Host.IO;
 
 namespace Tgstation.Server.Host.Components.Byond
@@ -27,7 +29,7 @@ namespace Tgstation.Server.Host.Components.Byond
 		/// <summary>
 		/// Gets the URL formatter string for downloading a byond version of {0:Major} {1:Minor}.
 		/// </summary>
-		protected abstract string ByondRevisionsURLTemplate { get; }
+		protected abstract string ByondRevisionsUrlTemplate { get; }
 
 		/// <summary>
 		/// Gets the <see cref="IIOManager"/> for the <see cref="ByondInstallerBase"/>.
@@ -40,7 +42,7 @@ namespace Tgstation.Server.Host.Components.Byond
 		protected ILogger<ByondInstallerBase> Logger { get; }
 
 		/// <summary>
-		/// Initializes a new instance of the <see cref="ByondInstallerBase"/> <see langword="class"/>.
+		/// Initializes a new instance of the <see cref="ByondInstallerBase"/> class.
 		/// </summary>
 		/// <param name="ioManager">The value of <see cref="IOManager"/>.</param>
 		/// <param name="logger">The value of <see cref="Logger"/>.</param>
@@ -82,7 +84,7 @@ namespace Tgstation.Server.Host.Components.Byond
 			if (version == null)
 				throw new ArgumentNullException(nameof(version));
 
-			var url = String.Format(CultureInfo.InvariantCulture, ByondRevisionsURLTemplate, version.Major, version.Minor);
+			var url = String.Format(CultureInfo.InvariantCulture, ByondRevisionsUrlTemplate, version.Major, version.Minor);
 
 			Logger.LogTrace("Downloading from: {0}", url);
 

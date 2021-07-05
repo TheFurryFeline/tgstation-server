@@ -1,9 +1,12 @@
+﻿using System;
+
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using System;
+
 using Tgstation.Server.Api.Models.Internal;
 using Tgstation.Server.Host.Components.Chat;
 using Tgstation.Server.Host.Components.Deployment;
+using Tgstation.Server.Host.Components.Deployment.Remote;
 using Tgstation.Server.Host.Components.Events;
 using Tgstation.Server.Host.Components.Session;
 using Tgstation.Server.Host.Configuration;
@@ -24,7 +27,7 @@ namespace Tgstation.Server.Host.Components.Watchdog
 		protected ISymlinkFactory SymlinkFactory { get; }
 
 		/// <summary>
-		/// Initializes a new instance of the <see cref="WindowsWatchdogFactory"/> <see langword="class"/>.
+		/// Initializes a new instance of the <see cref="WindowsWatchdogFactory"/> class.
 		/// </summary>
 		/// <param name="serverControl">The <see cref="IServerControl"/> for the <see cref="WatchdogFactory"/>.</param>
 		/// <param name="loggerFactory">The <see cref="ILoggerFactory"/> for the <see cref="WatchdogFactory"/>.</param>
@@ -58,6 +61,7 @@ namespace Tgstation.Server.Host.Components.Watchdog
 			IIOManager gameIOManager,
 			IIOManager diagnosticsIOManager,
 			IEventConsumer eventConsumer,
+			IRemoteDeploymentManagerFactory remoteDeploymentManagerFactory,
 			Api.Models.Instance instance,
 			DreamDaemonSettings settings)
 			=> new WindowsWatchdog(
@@ -70,6 +74,7 @@ namespace Tgstation.Server.Host.Components.Watchdog
 				AsyncDelayer,
 				diagnosticsIOManager,
 				eventConsumer,
+				remoteDeploymentManagerFactory,
 				gameIOManager,
 				SymlinkFactory,
 				LoggerFactory.CreateLogger<WindowsWatchdog>(),

@@ -2,41 +2,40 @@
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+
 using Tgstation.Server.Api;
 using Tgstation.Server.Api.Models;
+using Tgstation.Server.Api.Models.Request;
+using Tgstation.Server.Api.Models.Response;
 
 namespace Tgstation.Server.Client
 {
 	/// <inheritdoc />
-	sealed class UsersClient : IUsersClient
+	sealed class UsersClient : PaginatedClient, IUsersClient
 	{
 		/// <summary>
-		/// The <see cref="apiClient"/> for the <see cref="UsersClient"/>
+		/// Initializes a new instance of the <see cref="UsersClient"/> class.
 		/// </summary>
-		readonly IApiClient apiClient;
-
-		/// <summary>
-		/// Construct an <see cref="UsersClient"/>
-		/// </summary>
-		/// <param name="apiClient">The value of <see cref="apiClient"/></param>
+		/// <param name="apiClient">The <see cref="IApiClient"/> for the <see cref="PaginatedClient"/>.</param>
 		public UsersClient(IApiClient apiClient)
+			: base(apiClient)
 		{
-			this.apiClient = apiClient ?? throw new ArgumentNullException(nameof(apiClient));
 		}
 
 		/// <inheritdoc />
-		public Task<User> Create(UserUpdate user, CancellationToken cancellationToken) => apiClient.Create<UserUpdate, User>(Routes.User, user ?? throw new ArgumentNullException(nameof(user)), cancellationToken);
+		public Task<UserResponse> Create(UserCreateRequest user, CancellationToken cancellationToken) => ApiClient.Create<UserCreateRequest, UserResponse>(Routes.User, user ?? throw new ArgumentNullException(nameof(user)), cancellationToken);
 
 		/// <inheritdoc />
-		public Task<User> GetId(Api.Models.Internal.User user, CancellationToken cancellationToken) => apiClient.Read<User>(Routes.SetID(Routes.User, user?.Id ?? throw new ArgumentNullException(nameof(user))), cancellationToken);
+		public Task<UserResponse> GetId(EntityId user, CancellationToken cancellationToken) => ApiClient.Read<UserResponse>(Routes.SetID(Routes.User, user?.Id ?? throw new ArgumentNullException(nameof(user))), cancellationToken);
 
 		/// <inheritdoc />
-		public Task<IReadOnlyList<User>> List(CancellationToken cancellationToken) => apiClient.Read<IReadOnlyList<User>>(Routes.ListRoute(Routes.User), cancellationToken);
+		public Task<IReadOnlyList<UserResponse>> List(PaginationSettings? paginationSettings, CancellationToken cancellationToken)
+			=> ReadPaged<UserResponse>(paginationSettings, Routes.ListRoute(Routes.User), null, cancellationToken);
 
 		/// <inheritdoc />
-		public Task<User> Read(CancellationToken cancellationToken) => apiClient.Read<User>(Routes.User, cancellationToken);
+		public Task<UserResponse> Read(CancellationToken cancellationToken) => ApiClient.Read<UserResponse>(Routes.User, cancellationToken);
 
 		/// <inheritdoc />
-		public Task<User> Update(UserUpdate user, CancellationToken cancellationToken) => apiClient.Update<UserUpdate, User>(Routes.User, user ?? throw new ArgumentNullException(nameof(user)), cancellationToken);
+		public Task<UserResponse> Update(UserUpdateRequest user, CancellationToken cancellationToken) => ApiClient.Update<UserUpdateRequest, UserResponse>(Routes.User, user ?? throw new ArgumentNullException(nameof(user)), cancellationToken);
 	}
 }

@@ -1,12 +1,14 @@
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
 using Tgstation.Server.Api.Models;
 using Tgstation.Server.Host.Components.Interop;
 using Tgstation.Server.Host.Components.Interop.Bridge;
@@ -18,6 +20,7 @@ using Tgstation.Server.Host.Extensions;
 using Tgstation.Server.Host.IO;
 using Tgstation.Server.Host.Jobs;
 using Tgstation.Server.Host.Security;
+using Tgstation.Server.Host.Swarm;
 using Tgstation.Server.Host.System;
 
 namespace Tgstation.Server.Host.Components
@@ -26,7 +29,6 @@ namespace Tgstation.Server.Host.Components
 	sealed class InstanceManager :
 		IInstanceManager,
 		IInstanceCoreProvider,
-		IRestartHandler,
 		IHostedService,
 		IBridgeRegistrar,
 		IAsyncDisposable
@@ -35,62 +37,57 @@ namespace Tgstation.Server.Host.Components
 		public Task Ready => readyTcs.Task;
 
 		/// <summary>
-		/// The <see cref="Lazy{T}"/> <see cref="IRestartRegistration"/> for the <see cref="InstanceManager"/>;
-		/// </summary>
-		readonly Lazy<IRestartRegistration> lazyRestartRegistration;
-
-		/// <summary>
-		/// The <see cref="IInstanceFactory"/> for the <see cref="InstanceManager"/>
+		/// The <see cref="IInstanceFactory"/> for the <see cref="InstanceManager"/>.
 		/// </summary>
 		readonly IInstanceFactory instanceFactory;
 
 		/// <summary>
-		/// The <see cref="IIOManager"/> for the <see cref="InstanceManager"/>
+		/// The <see cref="IIOManager"/> for the <see cref="InstanceManager"/>.
 		/// </summary>
 		readonly IIOManager ioManager;
 
 		/// <summary>
-		/// The <see cref="IDatabaseContextFactory"/> for the <see cref="InstanceManager"/>
+		/// The <see cref="IDatabaseContextFactory"/> for the <see cref="InstanceManager"/>.
 		/// </summary>
 		readonly IDatabaseContextFactory databaseContextFactory;
 
 		/// <summary>
-		/// The <see cref="IAssemblyInformationProvider"/> for the <see cref="InstanceManager"/>
+		/// The <see cref="IAssemblyInformationProvider"/> for the <see cref="InstanceManager"/>.
 		/// </summary>
 		readonly IAssemblyInformationProvider assemblyInformationProvider;
 
 		/// <summary>
-		/// The <see cref="IJobManager"/> for the <see cref="InstanceManager"/>
+		/// The <see cref="IJobManager"/> for the <see cref="InstanceManager"/>.
 		/// </summary>
 		readonly IJobManager jobManager;
 
 		/// <summary>
-		/// The <see cref="IServerControl"/> for the <see cref="InstanceManager"/>
+		/// The <see cref="IServerControl"/> for the <see cref="InstanceManager"/>.
 		/// </summary>
 		readonly IServerControl serverControl;
 
 		/// <summary>
-		/// The <see cref="ISystemIdentityFactory"/> for the <see cref="InstanceManager"/>
+		/// The <see cref="ISystemIdentityFactory"/> for the <see cref="InstanceManager"/>.
 		/// </summary>
 		readonly ISystemIdentityFactory systemIdentityFactory;
 
 		/// <summary>
-		/// The <see cref="IAsyncDelayer"/> for the <see cref="InstanceManager"/>
+		/// The <see cref="IAsyncDelayer"/> for the <see cref="InstanceManager"/>.
 		/// </summary>
 		readonly IAsyncDelayer asyncDelayer;
 
 		/// <summary>
-		/// The <see cref="IDatabaseSeeder"/> for the <see cref="InstanceManager"/>
-		/// </summary>
-		readonly IDatabaseSeeder databaseSeeder;
-
-		/// <summary>
-		/// The <see cref="IServerPortProvider"/> for the <see cref="InstanceManager"/>
+		/// The <see cref="IServerPortProvider"/> for the <see cref="InstanceManager"/>.
 		/// </summary>
 		readonly IServerPortProvider serverPortProvider;
 
 		/// <summary>
-		/// The <see cref="ILogger"/> for the <see cref="InstanceManager"/>
+		/// The <see cref="ISwarmService"/> for the <see cref="InstanceManager"/>.
+		/// </summary>
+		readonly ISwarmService swarmService;
+
+		/// <summary>
+		/// The <see cref="ILogger"/> for the <see cref="InstanceManager"/>.
 		/// </summary>
 		readonly ILogger<InstanceManager> logger;
 
@@ -115,35 +112,36 @@ namespace Tgstation.Server.Host.Components
 		readonly GeneralConfiguration generalConfiguration;
 
 		/// <summary>
+		/// The <see cref="SwarmConfiguration"/> for the <see cref="InstanceManager"/>.
+		/// </summary>
+		readonly SwarmConfiguration swarmConfiguration;
+
+		/// <summary>
 		/// The <see cref="TaskCompletionSource{TResult}"/> for <see cref="Ready"/>.
 		/// </summary>
 		readonly TaskCompletionSource<object> readyTcs;
 
 		/// <summary>
-		/// Used in <see cref="StopAsync(CancellationToken)"/> to determine if database downgrades must be made
-		/// </summary>
-		Version downgradeVersion;
-
-		/// <summary>
-		/// If the <see cref="InstanceManager"/> has been <see cref="DisposeAsync"/>'d
+		/// If the <see cref="InstanceManager"/> has been <see cref="DisposeAsync"/>'d.
 		/// </summary>
 		bool disposed;
 
 		/// <summary>
-		/// Construct an <see cref="InstanceManager"/>
+		/// Initializes a new instance of the <see cref="InstanceManager"/> class.
 		/// </summary>
-		/// <param name="instanceFactory">The value of <see cref="instanceFactory"/></param>
-		/// <param name="ioManager">The value of <paramref name="ioManager"/></param>
-		/// <param name="databaseContextFactory">The value of <paramref name="databaseContextFactory"/></param>
-		/// <param name="assemblyInformationProvider">The value of <see cref="assemblyInformationProvider"/></param>
-		/// <param name="jobManager">The value of <see cref="jobManager"/></param>
-		/// <param name="serverControl">The value of <see cref="serverControl"/></param>
+		/// <param name="instanceFactory">The value of <see cref="instanceFactory"/>.</param>
+		/// <param name="ioManager">The value of <paramref name="ioManager"/>.</param>
+		/// <param name="databaseContextFactory">The value of <paramref name="databaseContextFactory"/>.</param>
+		/// <param name="assemblyInformationProvider">The value of <see cref="assemblyInformationProvider"/>.</param>
+		/// <param name="jobManager">The value of <see cref="jobManager"/>.</param>
+		/// <param name="serverControl">The value of <see cref="serverControl"/>.</param>
 		/// <param name="systemIdentityFactory">The value of <see cref="systemIdentityFactory"/>.</param>
 		/// <param name="asyncDelayer">The value of <see cref="asyncDelayer"/>.</param>
-		/// <param name="databaseSeeder">The value of <see cref="databaseSeeder"/>.</param>
 		/// <param name="serverPortProvider">The value of <see cref="serverPortProvider"/>.</param>
+		/// <param name="swarmService">The value of <see cref="swarmService"/>.</param>
 		/// <param name="generalConfigurationOptions">The <see cref="IOptions{TOptions}"/> containing the value of <see cref="generalConfiguration"/>.</param>
-		/// <param name="logger">The value of <see cref="logger"/></param>
+		/// <param name="swarmConfigurationOptions">The <see cref="IOptions{TOptions}"/> containing the value of <see cref="swarmConfiguration"/>.</param>
+		/// <param name="logger">The value of <see cref="logger"/>.</param>
 		public InstanceManager(
 			IInstanceFactory instanceFactory,
 			IIOManager ioManager,
@@ -153,9 +151,10 @@ namespace Tgstation.Server.Host.Components
 			IServerControl serverControl,
 			ISystemIdentityFactory systemIdentityFactory,
 			IAsyncDelayer asyncDelayer,
-			IDatabaseSeeder databaseSeeder,
 			IServerPortProvider serverPortProvider,
+			ISwarmService swarmService,
 			IOptions<GeneralConfiguration> generalConfigurationOptions,
+			IOptions<SwarmConfiguration> swarmConfigurationOptions,
 			ILogger<InstanceManager> logger)
 		{
 			this.instanceFactory = instanceFactory ?? throw new ArgumentNullException(nameof(instanceFactory));
@@ -166,12 +165,11 @@ namespace Tgstation.Server.Host.Components
 			this.serverControl = serverControl ?? throw new ArgumentNullException(nameof(serverControl));
 			this.systemIdentityFactory = systemIdentityFactory ?? throw new ArgumentNullException(nameof(systemIdentityFactory));
 			this.asyncDelayer = asyncDelayer ?? throw new ArgumentNullException(nameof(asyncDelayer));
-			this.databaseSeeder = databaseSeeder ?? throw new ArgumentNullException(nameof(databaseSeeder));
 			this.serverPortProvider = serverPortProvider ?? throw new ArgumentNullException(nameof(serverPortProvider));
+			this.swarmService = swarmService ?? throw new ArgumentNullException(nameof(swarmService));
 			generalConfiguration = generalConfigurationOptions?.Value ?? throw new ArgumentNullException(nameof(generalConfigurationOptions));
+			swarmConfiguration = swarmConfigurationOptions?.Value ?? throw new ArgumentNullException(nameof(swarmConfigurationOptions));
 			this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
-
-			lazyRestartRegistration = new Lazy<IRestartRegistration>(() => serverControl.RegisterForRestart(this));
 
 			instances = new Dictionary<long, InstanceContainer>();
 			bridgeHandlers = new Dictionary<string, IBridgeHandler>();
@@ -189,26 +187,25 @@ namespace Tgstation.Server.Host.Components
 				disposed = true;
 			}
 
-			foreach (var I in instances)
-				await I.Value.Instance.DisposeAsync().ConfigureAwait(false);
+			foreach (var instanceKvp in instances)
+				await instanceKvp.Value.Instance.DisposeAsync().ConfigureAwait(false);
 
-			lazyRestartRegistration.Value.Dispose();
 			instanceStateChangeSemaphore.Dispose();
 
 			logger.LogInformation("Server shutdown");
 		}
 
 		/// <inheritdoc />
-		public IInstanceReference GetInstanceReference(Models.Instance metadata)
+		public IInstanceReference GetInstanceReference(Api.Models.Instance metadata)
 		{
 			if (metadata == null)
 				throw new ArgumentNullException(nameof(metadata));
 
 			lock (instances)
 			{
-				if (!instances.TryGetValue(metadata.Id, out var instance))
+				if (!instances.TryGetValue(metadata.Id.Value, out var instance))
 				{
-					logger.LogTrace("Cannot reference instance {0} as it is not online!", metadata.Id);
+					logger.LogTrace("Cannot reference instance {0} as it is not online or on this node!", metadata.Id);
 					return null;
 				}
 
@@ -244,7 +241,7 @@ namespace Tgstation.Server.Host.Components
 					{
 						var targetInstance = new Models.Instance
 						{
-							Id = instance.Id
+							Id = instance.Id,
 						};
 						db.Instances.Attach(targetInstance);
 						targetInstance.Path = oldPath;
@@ -294,13 +291,13 @@ namespace Tgstation.Server.Host.Components
 			InstanceContainer container;
 			lock (instances)
 			{
-				if (!instances.TryGetValue(metadata.Id, out container))
+				if (!instances.TryGetValue(metadata.Id.Value, out container))
 				{
 					logger.LogDebug("Not offlining removed instance {0}", metadata.Id);
 					return;
 				}
 
-				instances.Remove(metadata.Id);
+				instances.Remove(metadata.Id.Value);
 			}
 
 			try
@@ -317,9 +314,10 @@ namespace Tgstation.Server.Host.Components
 						.Where(x => x.Instance.Id == metadata.Id)
 						.Select(x => new Models.Job
 						{
-							Id = x.Id
+							Id = x.Id,
 						});
-					await jobs.ForEachAsync(job =>
+					await jobs.ForEachAsync(
+						job =>
 					{
 						lock (tasks)
 							tasks.Add(jobManager.CancelJob(job, user, true, cancellationToken));
@@ -344,7 +342,7 @@ namespace Tgstation.Server.Host.Components
 
 			using var lockContext = await SemaphoreSlimContext.Lock(instanceStateChangeSemaphore, cancellationToken).ConfigureAwait(false);
 			lock (instances)
-				if (instances.ContainsKey(metadata.Id))
+				if (instances.ContainsKey(metadata.Id.Value))
 				{
 					logger.LogDebug("Aborting instance creation due to it seemingly already being online");
 					return;
@@ -359,7 +357,7 @@ namespace Tgstation.Server.Host.Components
 				try
 				{
 					lock (instances)
-						instances.Add(metadata.Id, new InstanceContainer(instance));
+						instances.Add(metadata.Id.Value, new InstanceContainer(instance));
 				}
 				catch (Exception ex)
 				{
@@ -385,35 +383,36 @@ namespace Tgstation.Server.Host.Components
 		}
 
 		/// <inheritdoc />
-		#pragma warning disable CA1506 // TODO: Decomplexify
-		public Task StartAsync(CancellationToken cancellationToken) => databaseContextFactory.UseContext(async databaseContext =>
+		public async Task StartAsync(CancellationToken cancellationToken)
 		{
-			logger.LogInformation(assemblyInformationProvider.VersionString);
-
-			// we do this here because making the restart registration triggers a trace log message
-			// The above log message should be the first one one startup
-			var _ = lazyRestartRegistration.Value;
-
 			try
 			{
+				logger.LogInformation(assemblyInformationProvider.VersionString);
 				generalConfiguration.CheckCompatibility(logger);
 
 				CheckSystemCompatibility();
+
+				await InitializeSwarm(cancellationToken).ConfigureAwait(false);
+
+				List<Models.Instance> dbInstances = null;
+				var instanceEnumeration = databaseContextFactory.UseContext(
+					async databaseContext => dbInstances = await databaseContext
+						.Instances
+						.AsQueryable()
+						.Where(x => x.Online.Value && x.SwarmIdentifer == swarmConfiguration.Identifier)
+						.Include(x => x.RepositorySettings)
+						.Include(x => x.ChatSettings)
+						.ThenInclude(x => x.Channels)
+						.Include(x => x.DreamDaemonSettings)
+						.ToListAsync(cancellationToken)
+						.ConfigureAwait(false));
+
 				var factoryStartup = instanceFactory.StartAsync(cancellationToken);
-				await databaseSeeder.Initialize(databaseContext, cancellationToken).ConfigureAwait(false);
-				await jobManager.StartAsync(cancellationToken).ConfigureAwait(false);
-				var dbInstances = await databaseContext
-					.Instances
-					.AsQueryable()
-					.Where(x => x.Online.Value)
-					.Include(x => x.RepositorySettings)
-					.Include(x => x.ChatSettings)
-					.ThenInclude(x => x.Channels)
-					.Include(x => x.DreamDaemonSettings)
-					.ToListAsync(cancellationToken)
-					.ConfigureAwait(false);
-				await factoryStartup.ConfigureAwait(false);
-				var tasks = dbInstances.Select(
+				var jobManagerStartup = jobManager.StartAsync(cancellationToken);
+
+				await Task.WhenAll(instanceEnumeration, factoryStartup, jobManagerStartup).ConfigureAwait(false);
+
+				var instanceOnliningTasks = dbInstances.Select(
 					async metadata =>
 					{
 						try
@@ -424,18 +423,18 @@ namespace Tgstation.Server.Host.Components
 						{
 							logger.LogError(ex, "Failed to online instance {0}!");
 						}
-					})
-					.ToList();
-				await Task.WhenAll(tasks).ConfigureAwait(false);
+					});
+
+				await Task.WhenAll(instanceOnliningTasks).ConfigureAwait(false);
 
 				jobManager.Activate();
 
 				logger.LogInformation("Server ready!");
 				readyTcs.SetResult(null);
 			}
-			catch (OperationCanceledException)
+			catch (OperationCanceledException ex)
 			{
-				logger.LogInformation("Cancelled instance manager initialization!");
+				logger.LogInformation(ex, "Cancelled instance manager initialization!");
 			}
 			catch (Exception e)
 			{
@@ -452,49 +451,24 @@ namespace Tgstation.Server.Host.Components
 
 				throw;
 			}
-		});
-		#pragma warning restore CA1506 // TODO: Decomplexify
+		}
 
 		/// <inheritdoc />
 		public async Task StopAsync(CancellationToken cancellationToken)
 		{
 			try
 			{
+				var instanceFactoryStopTask = instanceFactory.StopAsync(cancellationToken);
 				await jobManager.StopAsync(cancellationToken).ConfigureAwait(false);
 				await Task.WhenAll(instances.Select(x => x.Value.Instance.StopAsync(cancellationToken))).ConfigureAwait(false);
-				await instanceFactory.StopAsync(cancellationToken).ConfigureAwait(false);
+				await instanceFactoryStopTask.ConfigureAwait(false);
 
-				// downgrade the db if necessary
-				if (downgradeVersion != null)
-					await databaseContextFactory.UseContext(db => databaseSeeder.Downgrade(db, downgradeVersion, cancellationToken)).ConfigureAwait(false);
+				await swarmService.Shutdown(cancellationToken).ConfigureAwait(false);
 			}
 			catch (Exception ex)
 			{
 				logger.LogError(ex, "Instance manager stop exception!");
 			}
-		}
-
-		/// <inheritdoc />
-		public Task HandleRestart(Version updateVersion, CancellationToken cancellationToken)
-		{
-			downgradeVersion = updateVersion != null && updateVersion < assemblyInformationProvider.Version ? updateVersion : null;
-			return Task.CompletedTask;
-		}
-
-		/// <summary>
-		/// Check we have a valid system identity.
-		/// </summary>
-		private void CheckSystemCompatibility()
-		{
-			using (var systemIdentity = systemIdentityFactory.GetCurrent())
-			{
-				if (!systemIdentity.CanCreateSymlinks)
-					throw new InvalidOperationException("The user running tgstation-server cannot create symlinks! Please try running as an administrative user!");
-			}
-
-			// This runs before the real socket is opened, ensures we don't perform reattaches unless we're fairly certain the bind won't fail
-			// If it does fail, DD will be killed.
-			SocketExtensions.BindTest(serverPortProvider.HttpApiPort, true);
 		}
 
 		/// <inheritdoc />
@@ -555,9 +529,49 @@ namespace Tgstation.Server.Host.Components
 		{
 			lock (instances)
 			{
-				instances.TryGetValue(metadata.Id, out var container);
+				instances.TryGetValue(metadata.Id.Value, out var container);
 				return container?.Instance;
 			}
+		}
+
+		/// <summary>
+		/// Check we have a valid system identity.
+		/// </summary>
+		private void CheckSystemCompatibility()
+		{
+			using (var systemIdentity = systemIdentityFactory.GetCurrent())
+			{
+				if (!systemIdentity.CanCreateSymlinks)
+					throw new InvalidOperationException("The user running tgstation-server cannot create symlinks! Please try running as an administrative user!");
+			}
+
+			// This runs before the real socket is opened, ensures we don't perform reattaches unless we're fairly certain the bind won't fail
+			// If it does fail, DD will be killed.
+			SocketExtensions.BindTest(serverPortProvider.HttpApiPort, true);
+		}
+
+		/// <summary>
+		/// Initializes the connection to the TGS swarm.
+		/// </summary>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="Task"/> representing the running operation.</returns>
+		async Task InitializeSwarm(CancellationToken cancellationToken)
+		{
+			SwarmRegistrationResult registrationResult;
+			do
+			{
+				registrationResult = await swarmService.Initialize(cancellationToken).ConfigureAwait(false);
+
+				if (registrationResult == SwarmRegistrationResult.Unauthorized)
+					throw new InvalidOperationException("Swarm private key does not match the swarm controller's!");
+
+				if (registrationResult == SwarmRegistrationResult.VersionMismatch)
+					throw new InvalidOperationException("Swarm controller's TGS version does not match our own!");
+
+				if (registrationResult != SwarmRegistrationResult.Success)
+					await asyncDelayer.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+			}
+			while (registrationResult != SwarmRegistrationResult.Success && !cancellationToken.IsCancellationRequested);
 		}
 	}
 }

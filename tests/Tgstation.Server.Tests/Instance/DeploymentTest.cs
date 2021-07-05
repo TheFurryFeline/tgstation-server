@@ -2,7 +2,10 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+
 using Tgstation.Server.Api.Models;
+using Tgstation.Server.Api.Models.Request;
+using Tgstation.Server.Client;
 using Tgstation.Server.Client.Components;
 using Tgstation.Server.Host.System;
 
@@ -21,7 +24,6 @@ namespace Tgstation.Server.Tests.Instance
 
 		public async Task Run(Task repositoryTask, CancellationToken cancellationToken)
 		{
-			Assert.IsFalse(repositoryTask.IsCompleted);
 			var deployJob = await dreamMakerClient.Compile(cancellationToken);
 			deployJob = await WaitForJob(deployJob, 30, true, null, cancellationToken);
 			Assert.IsTrue(deployJob.ErrorCode == ErrorCode.RepoCloning || deployJob.ErrorCode == ErrorCode.RepoMissing);
@@ -34,22 +36,47 @@ namespace Tgstation.Server.Tests.Instance
 
 			// by alphabetization rules, it should discover api_free here
 			if (!new PlatformIdentifier().IsWindows)
-				await dreamMakerClient.Update(new DreamMaker
+			{
+				var updatedDM = await dreamMakerClient.Update(new DreamMakerRequest
 				{
 					ProjectName = "tests/DMAPI/ApiFree/api_free",
 					ApiValidationPort = IntegrationTest.DMPort
 				}, cancellationToken);
-
-			var updatedDD = await dreamDaemonClient.Update(new DreamDaemon
+				Assert.AreEqual(IntegrationTest.DMPort, updatedDM.ApiValidationPort);
+				Assert.AreEqual("tests/DMAPI/ApiFree/api_free", updatedDM.ProjectName);
+			}
+			else
 			{
-				StartupTimeout = 5
+				var updatedDM = await dreamMakerClient.Update(new DreamMakerRequest
+				{
+					ApiValidationPort = IntegrationTest.DMPort
+				}, cancellationToken);
+				Assert.AreEqual(IntegrationTest.DMPort, updatedDM.ApiValidationPort);
+			}
+
+			var updatedDD = await dreamDaemonClient.Update(new DreamDaemonRequest
+			{
+				StartupTimeout = 5,
+				Port = IntegrationTest.DDPort
 			}, cancellationToken);
 			Assert.AreEqual(5U, updatedDD.StartupTimeout);
+			Assert.AreEqual(IntegrationTest.DDPort, updatedDD.Port);
+
+			await ApiAssert.ThrowsException<ConflictException>(() => dreamDaemonClient.Update(new DreamDaemonRequest
+			{
+				Port = IntegrationTest.DMPort
+			}, cancellationToken), ErrorCode.PortNotAvailable);
+
+			await ApiAssert.ThrowsException<ConflictException>(() => dreamMakerClient.Update(new DreamMakerRequest
+			{
+				ApiValidationPort = IntegrationTest.DDPort
+			}, cancellationToken), ErrorCode.PortNotAvailable);
+
 			deployJob = await dreamMakerClient.Compile(cancellationToken);
 			await WaitForJob(deployJob, 30, true, ErrorCode.DreamMakerNeverValidated, cancellationToken);
 
 			const string FailProject = "tests/DMAPI/BuildFail/build_fail";
-			var updated = await dreamMakerClient.Update(new DreamMaker
+			var updated = await dreamMakerClient.Update(new DreamMakerRequest
 			{
 				ProjectName = FailProject
 			}, cancellationToken);
@@ -59,7 +86,7 @@ namespace Tgstation.Server.Tests.Instance
 			deployJob = await dreamMakerClient.Compile(cancellationToken);
 			await WaitForJob(deployJob, 30, true, ErrorCode.DreamMakerExitCode, cancellationToken);
 
-			await dreamMakerClient.Update(new DreamMaker
+			await dreamMakerClient.Update(new DreamMakerRequest
 			{
 				ProjectName = "tests/DMAPI/ThisDoesntExist/this_doesnt_exist"
 			}, cancellationToken);

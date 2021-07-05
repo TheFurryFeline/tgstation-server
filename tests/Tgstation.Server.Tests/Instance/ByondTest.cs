@@ -1,4 +1,4 @@
-﻿using Castle.Core.Logging;
+using Castle.Core.Logging;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
@@ -6,8 +6,10 @@ using System;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+
 using Tgstation.Server.Api;
 using Tgstation.Server.Api.Models;
+using Tgstation.Server.Api.Models.Request;
 using Tgstation.Server.Client;
 using Tgstation.Server.Client.Components;
 using Tgstation.Server.Host.Components.Byond;
@@ -18,7 +20,7 @@ namespace Tgstation.Server.Tests.Instance
 {
 	sealed class ByondTest : JobsRequiredTest
 	{
-		public static readonly Version TestVersion = new Version(513, 1527);
+		public static readonly Version TestVersion = new Version(513, 1536);
 
 		readonly IByondClient byondClient;
 
@@ -41,25 +43,24 @@ namespace Tgstation.Server.Tests.Instance
 
 		async Task TestInstallFakeVersion(CancellationToken cancellationToken)
 		{
-			var newModel = new Api.Models.Byond
+			var newModel = new ByondVersionRequest
 			{
 				Version = new Version(5011, 1385)
 			};
-			var test = await byondClient.SetActiveVersion(newModel, cancellationToken).ConfigureAwait(false);
+			var test = await byondClient.SetActiveVersion(newModel, null, cancellationToken).ConfigureAwait(false);
 			Assert.IsNotNull(test.InstallJob);
 			await WaitForJob(test.InstallJob, 60, true, ErrorCode.ByondDownloadFail, cancellationToken).ConfigureAwait(false);
 		}
 
 		async Task TestInstallStable(CancellationToken cancellationToken)
 		{
-			var newModel = new Api.Models.Byond
+			var newModel = new ByondVersionRequest
 			{
 				Version = TestVersion
 			};
-			var test = await byondClient.SetActiveVersion(newModel, cancellationToken).ConfigureAwait(false);
+			var test = await byondClient.SetActiveVersion(newModel, null, cancellationToken).ConfigureAwait(false);
 			Assert.IsNotNull(test.InstallJob);
-			Assert.IsNull(test.Version);
-			await WaitForJob(test.InstallJob, 60, false, null, cancellationToken).ConfigureAwait(false);
+			await WaitForJob(test.InstallJob, 120, false, null, cancellationToken).ConfigureAwait(false);
 			var currentShit = await byondClient.ActiveVersion(cancellationToken).ConfigureAwait(false);
 			Assert.AreEqual(newModel.Version.Semver(), currentShit.Version);
 
@@ -75,10 +76,9 @@ namespace Tgstation.Server.Tests.Instance
 
 		async Task TestNoVersion(CancellationToken cancellationToken)
 		{
-			var allVersionsTask = byondClient.InstalledVersions(cancellationToken);
+			var allVersionsTask = byondClient.InstalledVersions(null, cancellationToken);
 			var currentShit = await byondClient.ActiveVersion(cancellationToken).ConfigureAwait(false);
 			Assert.IsNotNull(currentShit);
-			Assert.IsNull(currentShit.InstallJob);
 			Assert.IsNull(currentShit.Version);
 			var otherShit = await allVersionsTask.ConfigureAwait(false);
 			Assert.IsNotNull(otherShit);
@@ -98,11 +98,18 @@ namespace Tgstation.Server.Tests.Instance
 					Mock.Of<ILogger<PosixByondInstaller>>());
 
 			// get the bytes for stable
-			var test = await byondClient.SetActiveVersion(new Api.Models.Byond
-			{
-				Version = TestVersion,
-				Content = await byondInstaller.DownloadVersion(TestVersion, cancellationToken)
-			}, cancellationToken).ConfigureAwait(false);
+			using var stableBytesMs = new MemoryStream(
+				await byondInstaller.DownloadVersion(TestVersion, cancellationToken));
+
+			var test = await byondClient.SetActiveVersion(
+				new ByondVersionRequest
+				{
+					Version = TestVersion,
+					UploadCustomZip = true
+				},
+				stableBytesMs,
+				cancellationToken)
+				.ConfigureAwait(false);
 
 			Assert.IsNotNull(test.InstallJob);
 			await WaitForJob(test.InstallJob, 60, false, null, cancellationToken).ConfigureAwait(false);
@@ -111,21 +118,21 @@ namespace Tgstation.Server.Tests.Instance
 			Assert.AreEqual(new Version(TestVersion.Major, TestVersion.Minor, 1), newSettings.Version);
 
 			// test a few switches
-			newSettings = await byondClient.SetActiveVersion(new Api.Models.Byond
+			var installResponse = await byondClient.SetActiveVersion(new ByondVersionRequest
 			{
 				Version = TestVersion
-			}, cancellationToken);
-			Assert.IsNull(newSettings.InstallJob);
-			await ApiAssert.ThrowsException<ApiConflictException>(() => byondClient.SetActiveVersion(new Api.Models.Byond
+			}, null, cancellationToken);
+			Assert.IsNull(installResponse.InstallJob);
+			await ApiAssert.ThrowsException<ApiConflictException>(() => byondClient.SetActiveVersion(new ByondVersionRequest
 			{
 				Version = new Version(TestVersion.Major, TestVersion.Minor, 2)
-			}, cancellationToken), ErrorCode.ByondNonExistentCustomVersion);
+			}, null, cancellationToken), ErrorCode.ByondNonExistentCustomVersion);
 
-			newSettings = await byondClient.SetActiveVersion(new Api.Models.Byond
+			installResponse = await byondClient.SetActiveVersion(new ByondVersionRequest
 			{
 				Version = new Version(TestVersion.Major, TestVersion.Minor, 1)
-			}, cancellationToken);
-			Assert.IsNull(newSettings.InstallJob);
+			}, null, cancellationToken);
+			Assert.IsNull(installResponse.InstallJob);
 		}
 	}
 }

@@ -1,11 +1,14 @@
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+
+using Tgstation.Server.Host.Components.Deployment.Remote;
 using Tgstation.Server.Host.Database;
 using Tgstation.Server.Host.IO;
 using Tgstation.Server.Host.Models;
@@ -13,7 +16,7 @@ using Tgstation.Server.Host.Models;
 namespace Tgstation.Server.Host.Components.Deployment
 {
 	/// <summary>
-	/// Standard <see cref="IDmbFactory"/>
+	/// Standard <see cref="IDmbFactory"/>.
 	/// </summary>
 	sealed class DmbFactory : IDmbFactory, ICompileJobSink
 	{
@@ -31,27 +34,32 @@ namespace Tgstation.Server.Host.Components.Deployment
 		public bool DmbAvailable => nextDmbProvider != null;
 
 		/// <summary>
-		/// The <see cref="IDatabaseContextFactory"/> for the <see cref="DmbFactory"/>
+		/// The <see cref="IDatabaseContextFactory"/> for the <see cref="DmbFactory"/>.
 		/// </summary>
 		readonly IDatabaseContextFactory databaseContextFactory;
 
 		/// <summary>
-		/// The <see cref="IIOManager"/> for the <see cref="DmbFactory"/>
+		/// The <see cref="IIOManager"/> for the <see cref="DmbFactory"/>.
 		/// </summary>
 		readonly IIOManager ioManager;
 
 		/// <summary>
-		/// The <see cref="ILogger"/> for the <see cref="DmbFactory"/>
+		/// The <see cref="IRemoteDeploymentManagerFactory"/> for the <see cref="DmbFactory"/>.
+		/// </summary>
+		readonly IRemoteDeploymentManagerFactory remoteDeploymentManagerFactory;
+
+		/// <summary>
+		/// The <see cref="ILogger"/> for the <see cref="DmbFactory"/>.
 		/// </summary>
 		readonly ILogger<DmbFactory> logger;
 
 		/// <summary>
-		/// The <see cref="Api.Models.Instance"/> for the <see cref="DmbFactory"/>
+		/// The <see cref="Api.Models.Instance"/> for the <see cref="DmbFactory"/>.
 		/// </summary>
-		readonly Api.Models.Instance instance;
+		readonly Api.Models.Instance metadata;
 
 		/// <summary>
-		/// The <see cref="CancellationTokenSource"/> for <see cref="cleanupTask"/>
+		/// The <see cref="CancellationTokenSource"/> for <see cref="cleanupTask"/>.
 		/// </summary>
 		readonly CancellationTokenSource cleanupCts;
 
@@ -61,33 +69,45 @@ namespace Tgstation.Server.Host.Components.Deployment
 		readonly IDictionary<long, int> jobLockCounts;
 
 		/// <summary>
-		/// <see cref="Task"/> representing calls to <see cref="CleanJob(CompileJob)"/>
+		/// <see cref="Task"/> representing calls to <see cref="CleanJob(CompileJob)"/>.
 		/// </summary>
 		Task cleanupTask;
 
 		/// <summary>
-		/// <see cref="TaskCompletionSource{TResult}"/> resulting in the latest <see cref="DmbProvider"/> yet to exist
+		/// <see cref="TaskCompletionSource{TResult}"/> resulting in the latest <see cref="DmbProvider"/> yet to exist.
 		/// </summary>
 		TaskCompletionSource<object> newerDmbTcs;
 
 		/// <summary>
-		/// The latest <see cref="DmbProvider"/>
+		/// The latest <see cref="DmbProvider"/>.
 		/// </summary>
 		IDmbProvider nextDmbProvider;
 
 		/// <summary>
-		/// Construct a <see cref="DmbFactory"/>
+		/// If the <see cref="DmbFactory"/> is "started" via <see cref="Microsoft.Extensions.Hosting.IHostedService"/>.
 		/// </summary>
-		/// <param name="databaseContextFactory">The value of <see cref="databaseContextFactory"/></param>
-		/// <param name="ioManager">The value of <see cref="ioManager"/></param>
-		/// <param name="logger">The value of <see cref="logger"/></param>
-		/// <param name="instance">The value of <see cref="instance"/></param>
-		public DmbFactory(IDatabaseContextFactory databaseContextFactory, IIOManager ioManager, ILogger<DmbFactory> logger, Api.Models.Instance instance)
+		bool started;
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="DmbFactory"/> class.
+		/// </summary>
+		/// <param name="databaseContextFactory">The value of <see cref="databaseContextFactory"/>.</param>
+		/// <param name="ioManager">The value of <see cref="ioManager"/>.</param>
+		/// <param name="remoteDeploymentManagerFactory">The value of <see cref="remoteDeploymentManagerFactory"/>.</param>
+		/// <param name="logger">The value of <see cref="logger"/>.</param>
+		/// <param name="metadata">The value of <see cref="metadata"/>.</param>
+		public DmbFactory(
+			IDatabaseContextFactory databaseContextFactory,
+			IIOManager ioManager,
+			IRemoteDeploymentManagerFactory remoteDeploymentManagerFactory,
+			ILogger<DmbFactory> logger,
+			Api.Models.Instance metadata)
 		{
 			this.databaseContextFactory = databaseContextFactory ?? throw new ArgumentNullException(nameof(databaseContextFactory));
 			this.ioManager = ioManager ?? throw new ArgumentNullException(nameof(ioManager));
+			this.remoteDeploymentManagerFactory = remoteDeploymentManagerFactory ?? throw new ArgumentNullException(nameof(remoteDeploymentManagerFactory));
 			this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
-			this.instance = instance ?? throw new ArgumentNullException(nameof(instance));
+			this.metadata = metadata ?? throw new ArgumentNullException(nameof(metadata));
 
 			cleanupTask = Task.CompletedTask;
 			newerDmbTcs = new TaskCompletionSource<object>();
@@ -98,36 +118,6 @@ namespace Tgstation.Server.Host.Components.Deployment
 		/// <inheritdoc />
 		public void Dispose() => cleanupCts.Dispose(); // we don't dispose nextDmbProvider here, since it might be the only thing we have
 
-		/// <summary>
-		/// Delete the <see cref="Api.Models.Internal.CompileJob.DirectoryName"/> of <paramref name="job"/>
-		/// </summary>
-		/// <param name="job">The <see cref="CompileJob"/> to clean</param>
-		void CleanJob(CompileJob job)
-		{
-			async Task HandleCleanup()
-			{
-				var deleteJob = ioManager.DeleteDirectory(job.DirectoryName.ToString(), cleanupCts.Token);
-				Task otherTask;
-
-				// lock (this) //already locked below
-				otherTask = cleanupTask;
-				await Task.WhenAll(otherTask, deleteJob).ConfigureAwait(false);
-			}
-
-			lock (jobLockCounts)
-				if (!jobLockCounts.TryGetValue(job.Id, out var currentVal) || currentVal == 1)
-				{
-					jobLockCounts.Remove(job.Id);
-					logger.LogDebug("Cleaning lock-free compile job {0} => {1}", job.Id, job.DirectoryName);
-					cleanupTask = HandleCleanup();
-				}
-				else
-				{
-					var decremented = --jobLockCounts[job.Id];
-					logger.LogTrace("Compile job {0} lock count now: {1}", job.Id, decremented);
-				}
-		}
-
 		/// <inheritdoc />
 		public async Task LoadCompileJob(CompileJob job, CancellationToken cancellationToken)
 		{
@@ -137,6 +127,19 @@ namespace Tgstation.Server.Host.Components.Deployment
 			var newProvider = await FromCompileJob(job, cancellationToken).ConfigureAwait(false);
 			if (newProvider == null)
 				return;
+
+			// Do this first, because it's entirely possible when we set the tcs it will immediately need to be applied
+			if (started)
+			{
+				var remoteDeploymentManager = remoteDeploymentManagerFactory.CreateRemoteDeploymentManager(
+					metadata,
+					job);
+				await remoteDeploymentManager.StageDeployment(
+						newProvider.CompileJob,
+						cancellationToken)
+						.ConfigureAwait(false);
+			}
+
 			lock (jobLockCounts)
 			{
 				nextDmbProvider?.Dispose();
@@ -159,7 +162,7 @@ namespace Tgstation.Server.Host.Components.Deployment
 			lock (jobLockCounts)
 			{
 				var jobId = nextDmbProvider.CompileJob.Id;
-				var incremented = jobLockCounts[jobId] += lockCount;
+				var incremented = jobLockCounts[jobId.Value] += lockCount;
 				logger.LogTrace("Compile job {0} lock count now: {1}", jobId, incremented);
 				return nextDmbProvider;
 			}
@@ -174,7 +177,7 @@ namespace Tgstation.Server.Host.Components.Deployment
 				cj = await db
 					.CompileJobs
 					.AsQueryable()
-					.Where(x => x.Job.Instance.Id == instance.Id)
+					.Where(x => x.Job.Instance.Id == metadata.Id)
 					.OrderByDescending(x => x.Job.StoppedAt)
 					.FirstOrDefaultAsync(cancellationToken)
 					.ConfigureAwait(false);
@@ -184,6 +187,7 @@ namespace Tgstation.Server.Host.Components.Deployment
 			if (cj == default(CompileJob))
 				return;
 			await LoadCompileJob(cj, cancellationToken).ConfigureAwait(false);
+			started = true;
 
 			// we dont do CleanUnusedCompileJobs here because the watchdog may have plans for them yet
 		}
@@ -191,12 +195,19 @@ namespace Tgstation.Server.Host.Components.Deployment
 		/// <inheritdoc />
 		public async Task StopAsync(CancellationToken cancellationToken)
 		{
-			using (cancellationToken.Register(() => cleanupCts.Cancel()))
-				await cleanupTask.ConfigureAwait(false);
+			try
+			{
+				using (cancellationToken.Register(() => cleanupCts.Cancel()))
+					await cleanupTask.ConfigureAwait(false);
+			}
+			finally
+			{
+				started = false;
+			}
 		}
 
 		/// <inheritdoc />
-		#pragma warning disable CA1506 // TODO: Decomplexify
+#pragma warning disable CA1506 // TODO: Decomplexify
 		public async Task<IDmbProvider> FromCompileJob(CompileJob compileJob, CancellationToken cancellationToken)
 		{
 			if (compileJob == null)
@@ -228,7 +239,7 @@ namespace Tgstation.Server.Host.Components.Deployment
 				// It constitutes an API violation if it's returned by the DreamDaemonController so just set it here
 				// Bit of a hack, but it works out to be nearly if not the same value that's put in the DB
 				logger.LogTrace("Setting missing StoppedAt for CompileJob.Job #{0}...", compileJob.Job.Id);
-				compileJob.Job.StoppedAt = DateTimeOffset.Now;
+				compileJob.Job.StoppedAt = DateTimeOffset.UtcNow;
 			}
 
 			var providerSubmitted = false;
@@ -282,13 +293,13 @@ namespace Tgstation.Server.Host.Components.Deployment
 
 				lock (jobLockCounts)
 				{
-					if (!jobLockCounts.TryGetValue(compileJob.Id, out int value))
+					if (!jobLockCounts.TryGetValue(compileJob.Id.Value, out int value))
 					{
 						value = 1;
-						jobLockCounts.Add(compileJob.Id, 1);
+						jobLockCounts.Add(compileJob.Id.Value, 1);
 					}
 					else
-						jobLockCounts[compileJob.Id] = ++value;
+						jobLockCounts[compileJob.Id.Value] = ++value;
 
 					providerSubmitted = true;
 
@@ -302,10 +313,10 @@ namespace Tgstation.Server.Host.Components.Deployment
 					newProvider.Dispose();
 			}
 		}
-		#pragma warning restore CA1506
+#pragma warning restore CA1506
 
 		/// <inheritdoc />
-		#pragma warning disable CA1506 // TODO: Decomplexify
+#pragma warning disable CA1506 // TODO: Decomplexify
 		public async Task CleanUnusedCompileJobs(CancellationToken cancellationToken)
 		{
 			List<long> jobIdsToSkip;
@@ -323,8 +334,8 @@ namespace Tgstation.Server.Host.Components.Deployment
 					.CompileJobs
 					.AsQueryable()
 					.Where(
-						x => x.Job.Instance.Id == instance.Id
-						&& jobIdsToSkip.Contains(x.Id))
+						x => x.Job.Instance.Id == metadata.Id
+						&& jobIdsToSkip.Contains(x.Id.Value))
 					.Select(x => x.DirectoryName.Value)
 					.ToListAsync(cancellationToken)
 					.ConfigureAwait(false))
@@ -364,7 +375,7 @@ namespace Tgstation.Server.Host.Components.Deployment
 			if (deleting > 0)
 				await Task.WhenAll(tasks).ConfigureAwait(false);
 		}
-		#pragma warning restore CA1506
+#pragma warning restore CA1506
 
 		/// <inheritdoc />
 		public CompileJob LatestCompileJob()
@@ -372,6 +383,39 @@ namespace Tgstation.Server.Host.Components.Deployment
 			if (!DmbAvailable)
 				return null;
 			return LockNextDmb(0)?.CompileJob;
+		}
+
+		/// <summary>
+		/// Delete the <see cref="Api.Models.Internal.CompileJob.DirectoryName"/> of <paramref name="job"/>.
+		/// </summary>
+		/// <param name="job">The <see cref="CompileJob"/> to clean.</param>
+		void CleanJob(CompileJob job)
+		{
+			async Task HandleCleanup()
+			{
+				var deleteJob = ioManager.DeleteDirectory(job.DirectoryName.ToString(), cleanupCts.Token);
+				var remoteDeploymentManager = remoteDeploymentManagerFactory.CreateRemoteDeploymentManager(
+					metadata,
+					job);
+
+				// DCT: None available
+				var deploymentJob = remoteDeploymentManager.MarkInactive(job, default);
+				var otherTask = cleanupTask;
+				await Task.WhenAll(otherTask, deleteJob, deploymentJob).ConfigureAwait(false);
+			}
+
+			lock (jobLockCounts)
+				if (!jobLockCounts.TryGetValue(job.Id.Value, out var currentVal) || currentVal == 1)
+				{
+					jobLockCounts.Remove(job.Id.Value);
+					logger.LogDebug("Cleaning lock-free compile job {0} => {1}", job.Id, job.DirectoryName);
+					cleanupTask = HandleCleanup();
+				}
+				else
+				{
+					var decremented = --jobLockCounts[job.Id.Value];
+					logger.LogTrace("Compile job {0} lock count now: {1}", job.Id, decremented);
+				}
 		}
 	}
 }

@@ -1,11 +1,15 @@
-using Microsoft.Extensions.Logging;
-using System;
+﻿using System;
 using System.Globalization;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+
+using Microsoft.Extensions.Logging;
+
 using Tgstation.Server.Api.Models.Internal;
 using Tgstation.Server.Host.Components.Chat;
 using Tgstation.Server.Host.Components.Deployment;
+using Tgstation.Server.Host.Components.Deployment.Remote;
 using Tgstation.Server.Host.Components.Events;
 using Tgstation.Server.Host.Components.Session;
 using Tgstation.Server.Host.Core;
@@ -36,7 +40,7 @@ namespace Tgstation.Server.Host.Components.Watchdog
 		bool gracefulRebootRequired;
 
 		/// <summary>
-		/// Initializes a new instance of the <see cref="BasicWatchdog"/> <see langword="class"/>.
+		/// Initializes a new instance of the <see cref="BasicWatchdog"/> class.
 		/// </summary>
 		/// <param name="chat">The <see cref="IChatManager"/> for the <see cref="WatchdogBase"/>.</param>
 		/// <param name="sessionControllerFactory">The <see cref="ISessionControllerFactory"/> for the <see cref="WatchdogBase"/>.</param>
@@ -47,6 +51,7 @@ namespace Tgstation.Server.Host.Components.Watchdog
 		/// <param name="asyncDelayer">The <see cref="IAsyncDelayer"/> for the <see cref="WatchdogBase"/>.</param>
 		/// <param name="diagnosticsIOManager">The <see cref="IIOManager"/> for the <see cref="WatchdogBase"/>.</param>
 		/// <param name="eventConsumer">The <see cref="IEventConsumer"/> for the <see cref="WatchdogBase"/>.</param>
+		/// <param name="remoteDeploymentManagerFactory">The <see cref="IRemoteDeploymentManagerFactory"/> for the <see cref="WatchdogBase"/>.</param>
 		/// <param name="logger">The <see cref="ILogger"/> for the <see cref="WatchdogBase"/>.</param>
 		/// <param name="initialLaunchParameters">The <see cref="DreamDaemonLaunchParameters"/> for the <see cref="WatchdogBase"/>.</param>
 		/// <param name="instance">The <see cref="Api.Models.Instance"/> for the <see cref="WatchdogBase"/>.</param>
@@ -61,6 +66,7 @@ namespace Tgstation.Server.Host.Components.Watchdog
 			IAsyncDelayer asyncDelayer,
 			IIOManager diagnosticsIOManager,
 			IEventConsumer eventConsumer,
+			IRemoteDeploymentManagerFactory remoteDeploymentManagerFactory,
 			ILogger<BasicWatchdog> logger,
 			DreamDaemonLaunchParameters initialLaunchParameters,
 			Api.Models.Instance instance,
@@ -75,11 +81,26 @@ namespace Tgstation.Server.Host.Components.Watchdog
 				 asyncDelayer,
 				 diagnosticsIOManager,
 				 eventConsumer,
+				 remoteDeploymentManagerFactory,
 				 logger,
 				 initialLaunchParameters,
 				 instance,
 				 autoStart)
-		{ }
+		{
+		}
+
+		/// <inheritdoc />
+		public override Task ResetRebootState(CancellationToken cancellationToken)
+		{
+			if (!gracefulRebootRequired)
+				return base.ResetRebootState(cancellationToken);
+
+			return Restart(true, cancellationToken);
+		}
+
+		/// <inheritdoc />
+		public sealed override Task InstanceRenamed(string newInstanceName, CancellationToken cancellationToken)
+			=> Server?.InstanceRenamed(newInstanceName, cancellationToken) ?? Task.CompletedTask;
 
 		/// <inheritdoc />
 		protected override async Task<MonitorAction> HandleMonitorWakeup(MonitorActivationReason reason, CancellationToken cancellationToken)
@@ -87,27 +108,30 @@ namespace Tgstation.Server.Host.Components.Watchdog
 			switch (reason)
 			{
 				case MonitorActivationReason.ActiveServerCrashed:
-					string exitWord = Server.TerminationWasRequested ? "exited" : "crashed";
+					var eventType = Server.TerminationWasRequested
+						? EventType.WorldEndProcess
+						: EventType.WatchdogCrash;
+					await EventConsumer.HandleEvent(eventType, Enumerable.Empty<string>(), cancellationToken).ConfigureAwait(false);
+
+					var exitWord = Server.TerminationWasRequested ? "exited" : "crashed";
 					if (Server.RebootState == Session.RebootState.Shutdown)
 					{
 						// the time for graceful shutdown is now
-						await Chat.SendWatchdogMessage(
+						await Chat.QueueWatchdogMessage(
 							String.Format(
 								CultureInfo.InvariantCulture,
 								"Server {0}! Shutting down due to graceful termination request...",
 								exitWord),
-							false,
 							cancellationToken)
 							.ConfigureAwait(false);
 						return MonitorAction.Exit;
 					}
 
-					await Chat.SendWatchdogMessage(
+					await Chat.QueueWatchdogMessage(
 						String.Format(
 							CultureInfo.InvariantCulture,
 							"Server {0}! Rebooting...",
 							exitWord),
-						false,
 						cancellationToken)
 						.ConfigureAwait(false);
 					return MonitorAction.Restart;
@@ -122,17 +146,18 @@ namespace Tgstation.Server.Host.Components.Watchdog
 					gracefulRebootRequired = false;
 					Server.ResetRebootState();
 
+					await EventConsumer.HandleEvent(EventType.WorldReboot, Enumerable.Empty<string>(), cancellationToken).ConfigureAwait(false);
+
 					switch (rebootState)
 					{
 						case Session.RebootState.Normal:
-							return HandleNormalReboot();
+							return await HandleNormalReboot(cancellationToken).ConfigureAwait(false);
 						case Session.RebootState.Restart:
 							return MonitorAction.Restart;
 						case Session.RebootState.Shutdown:
 							// graceful shutdown time
-							await Chat.SendWatchdogMessage(
+							await Chat.QueueWatchdogMessage(
 								"Active server rebooted! Shutting down due to graceful termination request...",
-								false,
 								cancellationToken)
 								.ConfigureAwait(false);
 							return MonitorAction.Exit;
@@ -146,6 +171,9 @@ namespace Tgstation.Server.Host.Components.Watchdog
 					break;
 				case MonitorActivationReason.NewDmbAvailable:
 					await HandleNewDmbAvailable(cancellationToken).ConfigureAwait(false);
+					break;
+				case MonitorActivationReason.ActiveServerPrimed:
+					await EventConsumer.HandleEvent(EventType.WorldPrime, Enumerable.Empty<string>(), cancellationToken).ConfigureAwait(false);
 					break;
 				case MonitorActivationReason.Heartbeat:
 				default:
@@ -189,7 +217,11 @@ namespace Tgstation.Server.Host.Components.Watchdog
 				Task<ISessionController> serverLaunchTask;
 				if (!reattachInProgress)
 				{
+					Logger.LogTrace("Initializing controller with CompileJob {0}...", dmbToUse.CompileJob.Id);
+					await BeforeApplyDmb(dmbToUse.CompileJob, cancellationToken).ConfigureAwait(false);
 					dmbToUse = await PrepServerForLaunch(dmbToUse, cancellationToken).ConfigureAwait(false);
+
+					await chatTask.ConfigureAwait(false);
 					serverLaunchTask = SessionControllerFactory.LaunchNew(
 						dmbToUse,
 						null,
@@ -198,30 +230,33 @@ namespace Tgstation.Server.Host.Components.Watchdog
 						cancellationToken);
 				}
 				else
+				{
+					await chatTask.ConfigureAwait(false);
 					serverLaunchTask = SessionControllerFactory.Reattach(reattachInfo, cancellationToken);
+				}
 
 				// retrieve the session controller
 				Server = await serverLaunchTask.ConfigureAwait(false);
-
-				// failed reattaches will return null
-				Server?.SetHighPriority();
 
 				// possiblity of null servers due to failed reattaches
 				if (Server == null)
 				{
 					await ReattachFailure(
-						chatTask,
 						cancellationToken)
 						.ConfigureAwait(false);
 					return;
 				}
 
+				Server.SetHighPriority();
+
 				await CheckLaunchResult(Server, "Server", cancellationToken).ConfigureAwait(false);
 
 				Server.EnableCustomChatCommands();
 			}
-			catch
+			catch (Exception ex)
 			{
+				Logger.LogTrace(ex, "Controller initialization failure!");
+
 				// kill the controllers
 				bool serverWasActive = Server != null;
 
@@ -239,11 +274,13 @@ namespace Tgstation.Server.Host.Components.Watchdog
 		/// <summary>
 		/// Handler for <see cref="MonitorActivationReason.ActiveServerRebooted"/> when the <see cref="RebootState"/> is <see cref="RebootState.Normal"/>.
 		/// </summary>
-		/// <returns>The <see cref="MonitorAction"/> to take.</returns>
-		protected virtual MonitorAction HandleNormalReboot()
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="MonitorAction"/> to take.</returns>
+		protected virtual Task<MonitorAction> HandleNormalReboot(CancellationToken cancellationToken)
 		{
-			bool dmbUpdatePending = ActiveLaunchParameters != LastLaunchParameters;
-			return dmbUpdatePending ? MonitorAction.Restart : MonitorAction.Continue;
+			var settingsUpdatePending = ActiveLaunchParameters != LastLaunchParameters;
+			var result = settingsUpdatePending ? MonitorAction.Restart : MonitorAction.Continue;
+			return Task.FromResult(result);
 		}
 
 		/// <summary>
@@ -255,9 +292,8 @@ namespace Tgstation.Server.Host.Components.Watchdog
 		{
 			gracefulRebootRequired = true;
 			if (Server.CompileJob.DMApiVersion == null)
-				return Chat.SendWatchdogMessage(
+				return Chat.QueueWatchdogMessage(
 					"A new deployment has been made but cannot be applied automatically as the currently running server has no DMAPI. Please manually reboot the server to apply the update.",
-					true,
 					cancellationToken);
 			return Server.SetRebootState(Session.RebootState.Restart, cancellationToken);
 		}
@@ -269,18 +305,5 @@ namespace Tgstation.Server.Host.Components.Watchdog
 		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
 		/// <returns>A <see cref="Task{TResult}"/> resulting in the modified <see cref="IDmbProvider"/> to be used.</returns>
 		protected virtual Task<IDmbProvider> PrepServerForLaunch(IDmbProvider dmbToUse, CancellationToken cancellationToken) => Task.FromResult(dmbToUse);
-
-		/// <inheritdoc />
-		public override Task ResetRebootState(CancellationToken cancellationToken)
-		{
-			if (!gracefulRebootRequired)
-				return base.ResetRebootState(cancellationToken);
-
-			return Restart(true, cancellationToken);
-		}
-
-		/// <inheritdoc />
-		public sealed override Task InstanceRenamed(string newInstanceName, CancellationToken cancellationToken)
-			=> Server?.InstanceRenamed(newInstanceName, cancellationToken) ?? Task.CompletedTask;
 	}
 }

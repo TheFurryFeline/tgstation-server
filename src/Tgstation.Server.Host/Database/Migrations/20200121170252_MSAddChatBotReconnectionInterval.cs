@@ -1,10 +1,11 @@
-﻿using Microsoft.EntityFrameworkCore.Migrations;
-using System;
+﻿using System;
+
+using Microsoft.EntityFrameworkCore.Migrations;
 
 namespace Tgstation.Server.Host.Database.Migrations
 {
 	/// <summary>
-	/// Adds the <see cref="Api.Models.Internal.ChatBot.ReconnectionInterval"/> property for MSSQL.
+	/// Adds the <see cref="Api.Models.Internal.ChatBotSettings.ReconnectionInterval"/> property for MSSQL.
 	/// </summary>
 	public partial class MSAddChatBotReconnectionInterval : Migration
 	{

@@ -1,19 +1,20 @@
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
-using Microsoft.Extensions.Primitives;
-using Octokit;
-using System;
-using System.Collections.Generic;
-using System.Globalization;
+﻿using System;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
+
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Octokit;
+
 using Tgstation.Server.Api;
 using Tgstation.Server.Api.Models;
+using Tgstation.Server.Api.Models.Request;
+using Tgstation.Server.Api.Models.Response;
 using Tgstation.Server.Api.Rights;
 using Tgstation.Server.Host.Configuration;
 using Tgstation.Server.Host.Core;
@@ -22,179 +23,124 @@ using Tgstation.Server.Host.Extensions;
 using Tgstation.Server.Host.IO;
 using Tgstation.Server.Host.Security;
 using Tgstation.Server.Host.System;
+using Tgstation.Server.Host.Transfer;
 
 namespace Tgstation.Server.Host.Controllers
 {
 	/// <summary>
-	/// <see cref="ApiController"/> for <see cref="Administration"/> purposes
+	/// <see cref="ApiController"/> for TGS administration purposes.
 	/// </summary>
 	[Route(Routes.Administration)]
 	public sealed class AdministrationController : ApiController
 	{
+		/// <summary>
+		/// Default <see cref="Exception.Message"/> for <see cref="ApiException"/>s.
+		/// </summary>
 		const string OctokitException = "Bad GitHub API response, check configuration!";
 
 		/// <summary>
-		/// The <see cref="IGitHubClientFactory"/> for the <see cref="AdministrationController"/>
+		/// The <see cref="IGitHubClientFactory"/> for the <see cref="AdministrationController"/>.
 		/// </summary>
 		readonly IGitHubClientFactory gitHubClientFactory;
 
 		/// <summary>
-		/// The <see cref="IServerControl"/> for the <see cref="AdministrationController"/>
+		/// The <see cref="IServerControl"/> for the <see cref="AdministrationController"/>.
 		/// </summary>
-		readonly IServerControl serverUpdater;
+		readonly IServerControl serverControl;
 
 		/// <summary>
-		/// The <see cref="IAssemblyInformationProvider"/> for the <see cref="AdministrationController"/>
+		/// The <see cref="IServerUpdateInitiator"/> for the <see cref="AdministrationController"/>.
+		/// </summary>
+		readonly IServerUpdateInitiator serverUpdater;
+
+		/// <summary>
+		/// The <see cref="IAssemblyInformationProvider"/> for the <see cref="AdministrationController"/>.
 		/// </summary>
 		readonly IAssemblyInformationProvider assemblyInformationProvider;
 
 		/// <summary>
-		/// The <see cref="IIOManager"/> for the <see cref="AdministrationController"/>
+		/// The <see cref="IIOManager"/> for the <see cref="AdministrationController"/>.
 		/// </summary>
 		readonly IIOManager ioManager;
 
 		/// <summary>
-		/// The <see cref="IPlatformIdentifier"/> for the <see cref="AdministrationController"/>
+		/// The <see cref="IPlatformIdentifier"/> for the <see cref="AdministrationController"/>.
 		/// </summary>
 		readonly IPlatformIdentifier platformIdentifier;
 
 		/// <summary>
-		/// The <see cref="UpdatesConfiguration"/> for the <see cref="AdministrationController"/>
+		/// The <see cref="IFileTransferTicketProvider"/> for the <see cref="AdministrationController"/>.
+		/// </summary>
+		readonly IFileTransferTicketProvider fileTransferService;
+
+		/// <summary>
+		/// The <see cref="UpdatesConfiguration"/> for the <see cref="AdministrationController"/>.
 		/// </summary>
 		readonly UpdatesConfiguration updatesConfiguration;
 
 		/// <summary>
-		/// The <see cref="GeneralConfiguration"/> for the <see cref="AdministrationController"/>
-		/// </summary>
-		readonly GeneralConfiguration generalConfiguration;
-
-		/// <summary>
-		/// The <see cref="FileLoggingConfiguration"/> for the <see cref="AdministrationController"/>
+		/// The <see cref="FileLoggingConfiguration"/> for the <see cref="AdministrationController"/>.
 		/// </summary>
 		readonly FileLoggingConfiguration fileLoggingConfiguration;
 
 		/// <summary>
-		/// Construct an <see cref="AdministrationController"/>
+		/// Initializes a new instance of the <see cref="AdministrationController"/> class.
 		/// </summary>
-		/// <param name="databaseContext">The <see cref="IDatabaseContext"/> for the <see cref="ApiController"/></param>
-		/// <param name="authenticationContextFactory">The <see cref="IAuthenticationContextFactory"/> for the <see cref="ApiController"/></param>
-		/// <param name="gitHubClientFactory">The value of <see cref="gitHubClientFactory"/></param>
-		/// <param name="serverUpdater">The value of <see cref="serverUpdater"/></param>
-		/// <param name="assemblyInformationProvider">The value of <see cref="assemblyInformationProvider"/></param>
-		/// <param name="ioManager">The value of <see cref="ioManager"/></param>
-		/// <param name="platformIdentifier">The value of <see cref="platformIdentifier"/></param>
-		/// <param name="logger">The <see cref="ILogger"/> for the <see cref="ApiController"/></param>
-		/// <param name="updatesConfigurationOptions">The <see cref="IOptions{TOptions}"/> containing value of <see cref="updatesConfiguration"/></param>
-		/// <param name="generalConfigurationOptions">The <see cref="IOptions{TOptions}"/> containing value of <see cref="generalConfiguration"/></param>
-		/// <param name="fileLoggingConfigurationOptions">The <see cref="IOptions{TOptions}"/> containing value of <see cref="fileLoggingConfiguration"/></param>
+		/// <param name="databaseContext">The <see cref="IDatabaseContext"/> for the <see cref="ApiController"/>.</param>
+		/// <param name="authenticationContextFactory">The <see cref="IAuthenticationContextFactory"/> for the <see cref="ApiController"/>.</param>
+		/// <param name="gitHubClientFactory">The value of <see cref="gitHubClientFactory"/>.</param>
+		/// <param name="serverControl">The value of <see cref="serverControl"/>.</param>
+		/// <param name="serverUpdater">The value of <see cref="serverUpdater"/>.</param>
+		/// <param name="assemblyInformationProvider">The value of <see cref="assemblyInformationProvider"/>.</param>
+		/// <param name="ioManager">The value of <see cref="ioManager"/>.</param>
+		/// <param name="platformIdentifier">The value of <see cref="platformIdentifier"/>.</param>
+		/// <param name="fileTransferService">The value of <see cref="fileTransferService"/>.</param>
+		/// <param name="logger">The <see cref="ILogger"/> for the <see cref="ApiController"/>.</param>
+		/// <param name="updatesConfigurationOptions">The <see cref="IOptions{TOptions}"/> containing value of <see cref="updatesConfiguration"/>.</param>
+		/// <param name="fileLoggingConfigurationOptions">The <see cref="IOptions{TOptions}"/> containing value of <see cref="fileLoggingConfiguration"/>.</param>
 		public AdministrationController(
 			IDatabaseContext databaseContext,
 			IAuthenticationContextFactory authenticationContextFactory,
 			IGitHubClientFactory gitHubClientFactory,
-			IServerControl serverUpdater,
+			IServerControl serverControl,
+			IServerUpdateInitiator serverUpdater,
 			IAssemblyInformationProvider assemblyInformationProvider,
 			IIOManager ioManager,
 			IPlatformIdentifier platformIdentifier,
+			IFileTransferTicketProvider fileTransferService,
 			ILogger<AdministrationController> logger,
 			IOptions<UpdatesConfiguration> updatesConfigurationOptions,
-			IOptions<GeneralConfiguration> generalConfigurationOptions,
 			IOptions<FileLoggingConfiguration> fileLoggingConfigurationOptions)
 			: base(
 				databaseContext,
 				authenticationContextFactory,
 				logger,
-				false)
+				true)
 		{
 			this.gitHubClientFactory = gitHubClientFactory ?? throw new ArgumentNullException(nameof(gitHubClientFactory));
+			this.serverControl = serverControl ?? throw new ArgumentNullException(nameof(serverControl));
 			this.serverUpdater = serverUpdater ?? throw new ArgumentNullException(nameof(serverUpdater));
 			this.assemblyInformationProvider = assemblyInformationProvider ?? throw new ArgumentNullException(nameof(assemblyInformationProvider));
 			this.ioManager = ioManager ?? throw new ArgumentNullException(nameof(ioManager));
 			this.platformIdentifier = platformIdentifier ?? throw new ArgumentNullException(nameof(platformIdentifier));
+			this.fileTransferService = fileTransferService ?? throw new ArgumentNullException(nameof(fileTransferService));
 			updatesConfiguration = updatesConfigurationOptions?.Value ?? throw new ArgumentNullException(nameof(updatesConfigurationOptions));
-			generalConfiguration = generalConfigurationOptions?.Value ?? throw new ArgumentNullException(nameof(generalConfigurationOptions));
 			fileLoggingConfiguration = fileLoggingConfigurationOptions?.Value ?? throw new ArgumentNullException(nameof(fileLoggingConfigurationOptions));
 		}
 
-		ObjectResult RateLimit(RateLimitExceededException exception)
-		{
-			Logger.LogWarning(exception, "Exceeded GitHub rate limit!");
-			var secondsString = Math.Ceiling((exception.Reset - DateTimeOffset.Now).TotalSeconds).ToString(CultureInfo.InvariantCulture);
-			Response.Headers.Add("Retry-After", new StringValues(secondsString));
-			return StatusCode(HttpStatusCode.TooManyRequests, new ErrorMessage(ErrorCode.GitHubApiRateLimit));
-		}
-
 		/// <summary>
-		/// Try to download and apply an update with a given <paramref name="newVersion"/>.
-		/// </summary>
-		/// <param name="newVersion">The version of the server to update to.</param>
-		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
-		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> of the operation.</returns>
-		async Task<IActionResult> CheckReleasesAndApplyUpdate(Version newVersion, CancellationToken cancellationToken)
-		{
-			Logger.LogDebug("Looking for GitHub releases version {0}...", newVersion);
-			IEnumerable<Release> releases;
-			try
-			{
-				var gitHubClient = GetGitHubClient();
-				releases = await gitHubClient
-					.Repository
-					.Release
-					.GetAll(updatesConfiguration.GitHubRepositoryId)
-					.WithToken(cancellationToken)
-					.ConfigureAwait(false);
-			}
-			catch (RateLimitExceededException e)
-			{
-				return RateLimit(e);
-			}
-			catch (ApiException e)
-			{
-				Logger.LogWarning(e, OctokitException);
-				return StatusCode(HttpStatusCode.FailedDependency);
-			}
-
-			releases = releases.Where(x => x.TagName.StartsWith(updatesConfiguration.GitTagPrefix, StringComparison.InvariantCulture));
-
-			Logger.LogTrace("Release query complete!");
-
-			foreach (var release in releases)
-				if (Version.TryParse(
-					release.TagName.Replace(
-						updatesConfiguration.GitTagPrefix, String.Empty, StringComparison.Ordinal),
-					out var version)
-					&& version == newVersion)
-				{
-					var asset = release.Assets.Where(x => x.Name.Equals(updatesConfiguration.UpdatePackageAssetName, StringComparison.Ordinal)).FirstOrDefault();
-					if (asset == default)
-						continue;
-
-					if (!serverUpdater.ApplyUpdate(version, new Uri(asset.BrowserDownloadUrl), ioManager))
-						return Conflict(new ErrorMessage(ErrorCode.ServerUpdateInProgress));
-					return Accepted(new Administration
-					{
-						WindowsHost = platformIdentifier.IsWindows,
-						NewVersion = newVersion
-					}); // gtfo of here before all the cancellation tokens fire
-				}
-
-			return Gone();
-		}
-
-		IGitHubClient GetGitHubClient() => String.IsNullOrEmpty(generalConfiguration.GitHubAccessToken) ? gitHubClientFactory.CreateClient() : gitHubClientFactory.CreateClient(generalConfiguration.GitHubAccessToken);
-
-		/// <summary>
-		/// Get <see cref="Administration"/> server information.
+		/// Get <see cref="AdministrationResponse"/> server information.
 		/// </summary>
 		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
 		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> for the operation.</returns>
-		/// <response code="200">Retrieved <see cref="Administration"/> data successfully.</response>
+		/// <response code="200">Retrieved <see cref="AdministrationResponse"/> data successfully.</response>
 		/// <response code="424">The GitHub API rate limit was hit. See response header Retry-After.</response>
 		/// <response code="429">A GitHub API error occurred. See error message for details.</response>
 		[HttpGet]
-		[TgsAuthorize]
-		[ProducesResponseType(typeof(Administration), 200)]
-		[ProducesResponseType(typeof(ErrorMessage), 424)]
-		[ProducesResponseType(typeof(ErrorMessage), 429)]
+		[TgsAuthorize(AdministrationRights.ChangeVersion)]
+		[ProducesResponseType(typeof(AdministrationResponse), 200)]
+		[ProducesResponseType(typeof(ErrorMessageResponse), 424)]
+		[ProducesResponseType(typeof(ErrorMessageResponse), 429)]
 		public async Task<IActionResult> Read(CancellationToken cancellationToken)
 		{
 			try
@@ -203,7 +149,7 @@ namespace Tgstation.Server.Host.Controllers
 				Uri repoUrl = null;
 				try
 				{
-					var gitHubClient = GetGitHubClient();
+					var gitHubClient = gitHubClientFactory.CreateClient();
 					var repositoryTask = gitHubClient
 						.Repository
 						.Get(updatesConfiguration.GitHubRepositoryId)
@@ -218,8 +164,8 @@ namespace Tgstation.Server.Host.Controllers
 							updatesConfiguration.GitTagPrefix,
 							StringComparison.InvariantCulture));
 
-					foreach (var I in releases)
-						if (Version.TryParse(I.TagName.Replace(updatesConfiguration.GitTagPrefix, String.Empty, StringComparison.Ordinal), out var version)
+					foreach (var release in releases)
+						if (Version.TryParse(release.TagName.Replace(updatesConfiguration.GitTagPrefix, String.Empty, StringComparison.Ordinal), out var version)
 							&& version.Major == assemblyInformationProvider.Version.Major
 							&& (greatestVersion == null || version > greatestVersion))
 							greatestVersion = version;
@@ -230,11 +176,10 @@ namespace Tgstation.Server.Host.Controllers
 					Logger.LogWarning(e, "Not found exception while retrieving upstream repository info!");
 				}
 
-				return Json(new Administration
+				return Json(new AdministrationResponse
 				{
 					LatestVersion = greatestVersion,
 					TrackedRepositoryUrl = repoUrl,
-					WindowsHost = platformIdentifier.IsWindows
 				});
 			}
 			catch (RateLimitExceededException e)
@@ -244,9 +189,9 @@ namespace Tgstation.Server.Host.Controllers
 			catch (ApiException e)
 			{
 				Logger.LogWarning(e, OctokitException);
-				return StatusCode(HttpStatusCode.FailedDependency, new ErrorMessage(ErrorCode.GitHubApiError)
+				return StatusCode(HttpStatusCode.FailedDependency, new ErrorMessageResponse(ErrorCode.RemoteApiError)
 				{
-					AdditionalData = e.Message
+					AdditionalData = e.Message,
 				});
 			}
 		}
@@ -254,7 +199,7 @@ namespace Tgstation.Server.Host.Controllers
 		/// <summary>
 		/// Attempt to perform a server upgrade.
 		/// </summary>
-		/// <param name="model">The model containing the <see cref="Administration.NewVersion"/> to update to.</param>
+		/// <param name="model">The <see cref="ServerUpdateRequest"/>.</param>
 		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
 		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> for the operation.</returns>
 		/// <response code="202">Update has been started successfully.</response>
@@ -264,52 +209,77 @@ namespace Tgstation.Server.Host.Controllers
 		/// <response code="429">A GitHub API error occurred.</response>
 		[HttpPost]
 		[TgsAuthorize(AdministrationRights.ChangeVersion)]
-		[ProducesResponseType(typeof(Administration), 202)]
-		[ProducesResponseType(typeof(ErrorMessage), 410)]
-		[ProducesResponseType(typeof(ErrorMessage), 422)]
-		[ProducesResponseType(typeof(ErrorMessage), 424)]
-		[ProducesResponseType(typeof(ErrorMessage), 429)]
-		public async Task<IActionResult> Update([FromBody] Administration model, CancellationToken cancellationToken)
+		[ProducesResponseType(typeof(ServerUpdateResponse), 202)]
+		[ProducesResponseType(typeof(ErrorMessageResponse), 410)]
+		[ProducesResponseType(typeof(ErrorMessageResponse), 422)]
+		[ProducesResponseType(typeof(ErrorMessageResponse), 424)]
+		[ProducesResponseType(typeof(ErrorMessageResponse), 429)]
+		public async Task<IActionResult> Update([FromBody] ServerUpdateRequest model, CancellationToken cancellationToken)
 		{
 			if (model == null)
 				throw new ArgumentNullException(nameof(model));
 
 			if (model.NewVersion == null)
-				return BadRequest(new ErrorMessage(ErrorCode.ModelValidationFailure)
+				return BadRequest(new ErrorMessageResponse(ErrorCode.ModelValidationFailure)
 				{
-					AdditionalData = "newVersion is required!"
+					AdditionalData = "newVersion is required!",
 				});
 
 			if (model.NewVersion.Major != assemblyInformationProvider.Version.Major)
-				return BadRequest(new ErrorMessage(ErrorCode.CannotChangeServerSuite));
+				return BadRequest(new ErrorMessageResponse(ErrorCode.CannotChangeServerSuite));
 
-			if (!serverUpdater.WatchdogPresent)
-				return UnprocessableEntity(new ErrorMessage(ErrorCode.MissingHostWatchdog));
+			if (!serverControl.WatchdogPresent)
+				return UnprocessableEntity(new ErrorMessageResponse(ErrorCode.MissingHostWatchdog));
 
-			return await CheckReleasesAndApplyUpdate(model.NewVersion, cancellationToken).ConfigureAwait(false);
+			try
+			{
+				var updateResult = await serverUpdater.BeginUpdate(model.NewVersion, cancellationToken).ConfigureAwait(false);
+				if (updateResult == ServerUpdateResult.ReleaseMissing)
+					return Gone();
+
+				if (updateResult == ServerUpdateResult.UpdateInProgress)
+					return BadRequest(new ErrorMessageResponse(ErrorCode.ServerUpdateInProgress));
+
+				return Accepted(new ServerUpdateResponse
+				{
+					NewVersion = model.NewVersion,
+				});
+			}
+			catch (RateLimitExceededException e)
+			{
+				return RateLimit(e);
+			}
+			catch (ApiException e)
+			{
+				Logger.LogWarning(e, OctokitException);
+				return StatusCode(HttpStatusCode.FailedDependency, new ErrorMessageResponse(ErrorCode.RemoteApiError)
+				{
+					AdditionalData = e.Message,
+				});
+			}
 		}
 
 		/// <summary>
 		/// Attempts to restart the server.
 		/// </summary>
-		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> of the request</returns>
+		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> of the request.</returns>
 		/// <response code="204">Restart begun successfully.</response>
 		/// <response code="422">Restart operations are unavailable due to the launch configuration of TGS.</response>
 		[HttpDelete]
 		[TgsAuthorize(AdministrationRights.RestartHost)]
 		[ProducesResponseType(204)]
-		[ProducesResponseType(typeof(ErrorMessage), 422)]
+		[ProducesResponseType(typeof(ErrorMessageResponse), 422)]
 		public async Task<IActionResult> Delete()
 		{
 			try
 			{
-				if (!serverUpdater.WatchdogPresent)
+				if (!serverControl.WatchdogPresent)
 				{
 					Logger.LogDebug("Restart request failed due to lack of host watchdog!");
-					return UnprocessableEntity(new ErrorMessage(ErrorCode.MissingHostWatchdog));
+					return UnprocessableEntity(new ErrorMessageResponse(ErrorCode.MissingHostWatchdog));
 				}
 
-				await serverUpdater.Restart().ConfigureAwait(false);
+				await serverControl.Restart().ConfigureAwait(false);
 				return NoContent();
 			}
 			catch (InvalidOperationException)
@@ -319,60 +289,72 @@ namespace Tgstation.Server.Host.Controllers
 		}
 
 		/// <summary>
-		/// List <see cref="LogFile"/>s present.
+		/// List <see cref="LogFileResponse"/>s present.
 		/// </summary>
+		/// <param name="page">The current page.</param>
+		/// <param name="pageSize">The page size.</param>
 		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
 		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> of the request.</returns>
 		/// <response code="200">Listed logs successfully.</response>
 		/// <response code="409">An IO error occurred while listing.</response>
 		[HttpGet(Routes.Logs)]
 		[TgsAuthorize(AdministrationRights.DownloadLogs)]
-		[ProducesResponseType(typeof(List<LogFile>), 200)]
-		[ProducesResponseType(typeof(ErrorMessage), 409)]
-		public async Task<IActionResult> ListLogs(CancellationToken cancellationToken)
-		{
-			var path = fileLoggingConfiguration.GetFullLogDirectory(ioManager, assemblyInformationProvider, platformIdentifier);
-			try
-			{
-				var files = await ioManager.GetFiles(path, cancellationToken).ConfigureAwait(false);
-				var tasks = files.Select(
-					async file => new LogFile
-					{
-						Name = ioManager.GetFileName(file),
-						LastModified = await ioManager.GetLastModified(
-							ioManager.ConcatPath(path, file),
-							cancellationToken)
-						.ConfigureAwait(false)
-					})
-					.ToList();
-
-				await Task.WhenAll(tasks).ConfigureAwait(false);
-
-				var result = tasks.Select(x => x.Result).ToList();
-
-				return Ok(result);
-			}
-			catch (IOException ex)
-			{
-				return Conflict(new ErrorMessage(ErrorCode.IOError)
+		[ProducesResponseType(typeof(PaginatedResponse<LogFileResponse>), 200)]
+		[ProducesResponseType(typeof(ErrorMessageResponse), 409)]
+		public Task<IActionResult> ListLogs([FromQuery] int? page, [FromQuery] int? pageSize, CancellationToken cancellationToken)
+			=> Paginated(
+				async () =>
 				{
-					AdditionalData = ex.ToString()
-				});
-			}
-		}
+					var path = fileLoggingConfiguration.GetFullLogDirectory(ioManager, assemblyInformationProvider, platformIdentifier);
+					try
+					{
+						var files = await ioManager.GetFiles(path, cancellationToken).ConfigureAwait(false);
+						var tasks = files.Select(
+							async file => new LogFileResponse
+							{
+								Name = ioManager.GetFileName(file),
+								LastModified = await ioManager
+									.GetLastModified(
+										ioManager.ConcatPath(path, file),
+										cancellationToken)
+										.ConfigureAwait(false),
+							})
+							.ToList();
+
+						await Task.WhenAll(tasks).ConfigureAwait(false);
+
+						return new PaginatableResult<LogFileResponse>(
+							tasks
+								.AsQueryable()
+								.Select(x => x.Result)
+								.OrderByDescending(x => x.Name));
+					}
+					catch (IOException ex)
+					{
+						return new PaginatableResult<LogFileResponse>(
+							Conflict(new ErrorMessageResponse(ErrorCode.IOError)
+							{
+								AdditionalData = ex.ToString(),
+							}));
+					}
+				},
+				null,
+				page,
+				pageSize,
+				cancellationToken);
 
 		/// <summary>
-		/// Download a <see cref="LogFile"/>.
+		/// Download a <see cref="LogFileResponse"/>.
 		/// </summary>
 		/// <param name="path">The path to download.</param>
 		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
 		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> of the request.</returns>
-		/// <response code="200">Downloaded <see cref="LogFile"/> successfully.</response>
+		/// <response code="200">Downloaded <see cref="LogFileResponse"/> successfully.</response>
 		/// <response code="409">An IO error occurred while downloading.</response>
 		[HttpGet(Routes.Logs + "/{*path}")]
 		[TgsAuthorize(AdministrationRights.DownloadLogs)]
-		[ProducesResponseType(typeof(List<LogFile>), 200)]
-		[ProducesResponseType(typeof(ErrorMessage), 409)]
+		[ProducesResponseType(typeof(LogFileResponse), 200)]
+		[ProducesResponseType(typeof(ErrorMessageResponse), 409)]
 		public async Task<IActionResult> GetLog(string path, CancellationToken cancellationToken)
 		{
 			if (path == null)
@@ -390,20 +372,27 @@ namespace Tgstation.Server.Host.Controllers
 				path);
 			try
 			{
+				var fileTransferTicket = fileTransferService.CreateDownload(
+					new FileDownloadProvider(
+						() => null,
+						null,
+						fullPath,
+						true));
+
 				var readTask = ioManager.ReadAllBytes(fullPath, cancellationToken);
 
-				return Ok(new LogFile
+				return Ok(new LogFileResponse
 				{
 					Name = path,
 					LastModified = await ioManager.GetLastModified(fullPath, cancellationToken).ConfigureAwait(false),
-					Content = await readTask.ConfigureAwait(false)
+					FileTicket = fileTransferTicket.FileTicket,
 				});
 			}
 			catch (IOException ex)
 			{
-				return Conflict(new ErrorMessage(ErrorCode.IOError)
+				return Conflict(new ErrorMessageResponse(ErrorCode.IOError)
 				{
-					AdditionalData = ex.ToString()
+					AdditionalData = ex.ToString(),
 				});
 			}
 		}

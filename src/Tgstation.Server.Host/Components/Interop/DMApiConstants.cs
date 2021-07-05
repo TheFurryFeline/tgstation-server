@@ -1,12 +1,15 @@
-﻿using Newtonsoft.Json;
+﻿using System;
+
+using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
-using System;
-using Tgstation.Server.Host.Components.Interop.Converters;
+
+using Tgstation.Server.Host.Extensions.Converters;
+using Tgstation.Server.Host.Properties;
 
 namespace Tgstation.Server.Host.Components.Interop
 {
 	/// <summary>
-	/// Constants used for communication with the DMAPI
+	/// Constants used for communication with the DMAPI.
 	/// </summary>
 	static class DMApiConstants
 	{
@@ -31,9 +34,9 @@ namespace Tgstation.Server.Host.Components.Interop
 		public const string TopicData = "tgs_data";
 
 		/// <summary>
-		/// The DMAPI <see cref="Version"/> being used.
+		/// The DMAPI <see cref="InteropVersion"/> being used.
 		/// </summary>
-		public static readonly Version Version = new Version(5, 2, 3);
+		public static readonly Version InteropVersion = Version.Parse(MasterVersionsAttribute.Instance.RawInteropVersion);
 
 		/// <summary>
 		/// <see cref="JsonSerializerSettings"/> for use when communicating with the DMAPI.
@@ -42,15 +45,15 @@ namespace Tgstation.Server.Host.Components.Interop
 		{
 			ContractResolver = new DefaultContractResolver
 			{
-				NamingStrategy = new CamelCaseNamingStrategy()
+				NamingStrategy = new CamelCaseNamingStrategy(),
 			},
 			Converters = new JsonConverter[]
 			{
 				new VersionConverter(),
-				new BoolConverter()
+				new BoolConverter(),
 			},
 			DefaultValueHandling = DefaultValueHandling.Ignore,
-			ReferenceLoopHandling = ReferenceLoopHandling.Ignore
+			ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
 		};
 	}
 }

@@ -1,8 +1,4 @@
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -10,14 +6,19 @@ using System.Linq.Expressions;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+
 using Tgstation.Server.Api;
 using Tgstation.Server.Api.Models;
+using Tgstation.Server.Api.Models.Request;
+using Tgstation.Server.Api.Models.Response;
 using Tgstation.Server.Api.Rights;
 using Tgstation.Server.Host.Components;
-using Tgstation.Server.Host.Configuration;
 using Tgstation.Server.Host.Core;
 using Tgstation.Server.Host.Database;
-using Tgstation.Server.Host.Extensions;
 using Tgstation.Server.Host.Jobs;
 using Tgstation.Server.Host.Models;
 using Tgstation.Server.Host.Security;
@@ -25,45 +26,38 @@ using Tgstation.Server.Host.Security;
 namespace Tgstation.Server.Host.Controllers
 {
 	/// <summary>
-	/// <see cref="ApiController"/> for managing the <see cref="Repository"/>s
+	/// <see cref="ApiController"/> for managing the git repository.
 	/// </summary>
 	[Route(Routes.Repository)]
-	#pragma warning disable CA1506 // TODO: Decomplexify
+#pragma warning disable CA1506 // TODO: Decomplexify
 	public sealed class RepositoryController : InstanceRequiredController
 	{
 		/// <summary>
-		/// The <see cref="IGitHubClientFactory"/> for the <see cref="RepositoryController"/>
+		/// The <see cref="IGitHubClientFactory"/> for the <see cref="RepositoryController"/>.
 		/// </summary>
 		readonly IGitHubClientFactory gitHubClientFactory;
 
 		/// <summary>
-		/// The <see cref="IJobManager"/> for the <see cref="RepositoryController"/>
+		/// The <see cref="IJobManager"/> for the <see cref="RepositoryController"/>.
 		/// </summary>
 		readonly IJobManager jobManager;
 
 		/// <summary>
-		/// The <see cref="GeneralConfiguration"/> for the <see cref="RepositoryController"/>
+		/// Initializes a new instance of the <see cref="RepositoryController"/> class.
 		/// </summary>
-		readonly GeneralConfiguration generalConfiguration;
-
-		/// <summary>
-		/// Construct a <see cref="RepositoryController"/>
-		/// </summary>
-		/// <param name="databaseContext">The <see cref="IDatabaseContext"/> for the <see cref="ApiController"/></param>
-		/// <param name="authenticationContextFactory">The <see cref="IAuthenticationContextFactory"/> for the <see cref="ApiController"/></param>
+		/// <param name="databaseContext">The <see cref="IDatabaseContext"/> for the <see cref="ApiController"/>.</param>
+		/// <param name="authenticationContextFactory">The <see cref="IAuthenticationContextFactory"/> for the <see cref="ApiController"/>.</param>
 		/// <param name="instanceManager">The <see cref="IInstanceManager"/> for the <see cref="InstanceRequiredController"/>.</param>
-		/// <param name="gitHubClientFactory">The value of <see cref="gitHubClientFactory"/></param>
-		/// <param name="jobManager">The value of <see cref="jobManager"/></param>
-		/// <param name="logger">The <see cref="ILogger"/> for the <see cref="ApiController"/></param>
-		/// <param name="generalConfigurationOptions">The <see cref="IOptions{TOptions}"/> containing value of <see cref="generalConfiguration"/></param>
+		/// <param name="gitHubClientFactory">The value of <see cref="gitHubClientFactory"/>.</param>
+		/// <param name="jobManager">The value of <see cref="jobManager"/>.</param>
+		/// <param name="logger">The <see cref="ILogger"/> for the <see cref="ApiController"/>.</param>
 		public RepositoryController(
 			IDatabaseContext databaseContext,
 			IAuthenticationContextFactory authenticationContextFactory,
 			IInstanceManager instanceManager,
 			IGitHubClientFactory gitHubClientFactory,
 			IJobManager jobManager,
-			ILogger<RepositoryController> logger,
-			IOptions<GeneralConfiguration> generalConfigurationOptions)
+			ILogger<RepositoryController> logger)
 			: base(
 				  instanceManager,
 				  databaseContext,
@@ -72,92 +66,27 @@ namespace Tgstation.Server.Host.Controllers
 		{
 			this.gitHubClientFactory = gitHubClientFactory ?? throw new ArgumentNullException(nameof(gitHubClientFactory));
 			this.jobManager = jobManager ?? throw new ArgumentNullException(nameof(jobManager));
-			generalConfiguration = generalConfigurationOptions?.Value ?? throw new ArgumentNullException(nameof(generalConfigurationOptions));
-		}
-
-		async Task<bool> LoadRevisionInformation(Components.Repository.IRepository repository, IDatabaseContext databaseContext, Models.Instance instance, string lastOriginCommitSha, Action<Models.RevisionInformation> revInfoSink, CancellationToken cancellationToken)
-		{
-			var repoSha = repository.Head;
-
-			IQueryable<Models.RevisionInformation> ApplyQuery(IQueryable<Models.RevisionInformation> query) => query
-				.Where(x => x.CommitSha == repoSha && x.Instance.Id == instance.Id)
-				.Include(x => x.CompileJobs)
-				.Include(x => x.ActiveTestMerges).ThenInclude(x => x.TestMerge).ThenInclude(x => x.MergedBy);
-
-			var revisionInfo = await ApplyQuery(databaseContext.RevisionInformations).FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
-
-			// If the DB doesn't have it, check the local set
-			if (revisionInfo == default)
-				revisionInfo = databaseContext
-					.RevisionInformations
-					.Local
-					.Where(x => x.CommitSha == repoSha && x.Instance.Id == instance.Id)
-					.FirstOrDefault();
-
-			var needsDbUpdate = revisionInfo == default;
-			if (needsDbUpdate)
-			{
-				// needs insertion
-				revisionInfo = new Models.RevisionInformation
-				{
-					Instance = instance,
-					CommitSha = repoSha,
-					CompileJobs = new List<Models.CompileJob>(),
-					ActiveTestMerges = new List<RevInfoTestMerge>() // non null vals for api returns
-				};
-
-				lock (databaseContext) // cleaner this way
-					databaseContext.RevisionInformations.Add(revisionInfo);
-			}
-
-			revisionInfo.OriginCommitSha ??= lastOriginCommitSha;
-			if (revisionInfo.OriginCommitSha == null)
-			{
-				revisionInfo.OriginCommitSha = repoSha;
-				Logger.LogInformation(Components.Repository.Repository.OriginTrackingErrorTemplate, repoSha);
-			}
-
-			revInfoSink?.Invoke(revisionInfo);
-			return needsDbUpdate;
-		}
-
-		async Task<bool> PopulateApi(Repository model, Components.Repository.IRepository repository, IDatabaseContext databaseContext, Models.Instance instance, CancellationToken cancellationToken)
-		{
-			if (repository.IsGitHubRepository)
-			{
-				model.GitHubOwner = repository.GitHubOwner;
-				model.GitHubName = repository.GitHubRepoName;
-			}
-
-			model.Origin = repository.Origin;
-			model.Reference = repository.Reference;
-
-			// rev info stuff
-			Models.RevisionInformation revisionInfo = null;
-			var needsDbUpdate = await LoadRevisionInformation(repository, databaseContext, instance, null, x => revisionInfo = x, cancellationToken).ConfigureAwait(false);
-			model.RevisionInformation = revisionInfo.ToApi();
-			return needsDbUpdate;
 		}
 
 		/// <summary>
 		/// Begin cloning the repository if it doesn't exist.
 		/// </summary>
-		/// <param name="model">Initial <see cref="Repository"/> settings.</param>
+		/// <param name="model">The <see cref="RepositoryCreateRequest"/>.</param>
 		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
 		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> of the request.</returns>
-		/// <response code="201">The <see cref="Repository"/> was created successfully and the <see cref="Api.Models.Job"/> to clone it has begun.</response>
+		/// <response code="201">The repository was created successfully and the <see cref="JobResponse"/> to clone it has begun.</response>
 		/// <response code="410">The database entity for the requested instance could not be retrieved. The instance was likely detached.</response>
 		[HttpPut]
 		[TgsAuthorize(RepositoryRights.SetOrigin)]
-		[ProducesResponseType(typeof(Repository), 201)]
-		[ProducesResponseType(typeof(ErrorMessage), 410)]
-		public async Task<IActionResult> Create([FromBody] Repository model, CancellationToken cancellationToken)
+		[ProducesResponseType(typeof(RepositoryResponse), 201)]
+		[ProducesResponseType(typeof(ErrorMessageResponse), 410)]
+		public async Task<IActionResult> Create([FromBody] RepositoryCreateRequest model, CancellationToken cancellationToken)
 		{
 			if (model == null)
 				throw new ArgumentNullException(nameof(model));
 
 			if (model.Origin == null)
-				return BadRequest(ErrorCode.RepoMissingOrigin);
+				return BadRequest(ErrorCode.ModelValidationFailure);
 
 			if (model.AccessUser == null ^ model.AccessToken == null)
 				return BadRequest(ErrorCode.RepoMismatchUserAndAccessToken);
@@ -172,14 +101,6 @@ namespace Tgstation.Server.Host.Controllers
 			if (currentModel == default)
 				return Gone();
 
-			// normalize github urls
-			const string BadGitHubUrl = "://www.github.com/";
-			var uiOrigin = model.Origin.ToUpperInvariant();
-			var uiBad = BadGitHubUrl.ToUpperInvariant();
-			var uiGitHub = Components.Repository.Repository.GitHubUrl.ToUpperInvariant();
-			if (uiOrigin.Contains(uiBad, StringComparison.Ordinal))
-				model.Origin = uiOrigin.Replace(uiBad, uiGitHub, StringComparison.Ordinal);
-
 			currentModel.AccessToken = model.AccessToken;
 			currentModel.AccessUser = model.AccessUser; // intentionally only these fields, user not allowed to change anything else atm
 			var cloneBranch = model.Reference;
@@ -191,53 +112,63 @@ namespace Tgstation.Server.Host.Controllers
 					var repoManager = instance.RepositoryManager;
 
 					if (repoManager.CloneInProgress)
-						return Conflict(new ErrorMessage(ErrorCode.RepoCloning));
+						return Conflict(new ErrorMessageResponse(ErrorCode.RepoCloning));
 
 					if (repoManager.InUse)
-						return Conflict(new ErrorMessage(ErrorCode.RepoBusy));
+						return Conflict(new ErrorMessageResponse(ErrorCode.RepoBusy));
 
 					using var repo = await repoManager.LoadRepository(cancellationToken).ConfigureAwait(false);
 
 					// clone conflict
 					if (repo != null)
-						return Conflict(new ErrorMessage(ErrorCode.RepoExists));
+						return Conflict(new ErrorMessageResponse(ErrorCode.RepoExists));
 
-					var job = new Models.Job
+					var job = new Job
 					{
-						Description = String.Format(CultureInfo.InvariantCulture, "Clone branch {1} of repository {0}", origin, cloneBranch ?? "master"),
+						Description = String.Format(
+							CultureInfo.InvariantCulture,
+							"Clone{1} repository {0}",
+							origin,
+							cloneBranch != null
+								? $"\"{cloneBranch}\" branch of"
+								: String.Empty),
 						StartedBy = AuthenticationContext.User,
 						CancelRightsType = RightsType.Repository,
 						CancelRight = (ulong)RepositoryRights.CancelClone,
-						Instance = Instance
+						Instance = Instance,
 					};
 					var api = currentModel.ToApi();
-					await jobManager.RegisterOperation(job, async (core, databaseContextFactory, paramJob, progressReporter, ct) =>
-					{
-						var repoManager = core.RepositoryManager;
-						using var repos = await repoManager.CloneRepository(
-							new Uri(origin),
-							cloneBranch,
-							currentModel.AccessUser,
-							currentModel.AccessToken,
-							progressReporter,
-							model.RecurseSubmodules ?? true,
-							ct)
-							.ConfigureAwait(false);
-						if (repos == null)
-							throw new JobException(ErrorCode.RepoExists);
-						var instance = new Models.Instance
+					await jobManager.RegisterOperation(
+						job,
+						async (core, databaseContextFactory, paramJob, progressReporter, ct) =>
 						{
-							Id = Instance.Id
-						};
-						await databaseContextFactory.UseContext(
-							async databaseContext =>
+							var repoManager = core.RepositoryManager;
+							using var repos = await repoManager.CloneRepository(
+								origin,
+								cloneBranch,
+								currentModel.AccessUser,
+								currentModel.AccessToken,
+								progressReporter,
+								model.RecurseSubmodules ?? true,
+								ct)
+								.ConfigureAwait(false);
+							if (repos == null)
+								throw new JobException(ErrorCode.RepoExists);
+							var instance = new Models.Instance
 							{
-								databaseContext.Instances.Attach(instance);
-								if (await PopulateApi(api, repos, databaseContext, instance, ct).ConfigureAwait(false))
-									await databaseContext.Save(ct).ConfigureAwait(false);
-							})
-							.ConfigureAwait(false);
-					}, cancellationToken).ConfigureAwait(false);
+								Id = Instance.Id,
+							};
+							await databaseContextFactory.UseContext(
+								async databaseContext =>
+								{
+									databaseContext.Instances.Attach(instance);
+									if (await PopulateApi(api, repos, databaseContext, instance, ct).ConfigureAwait(false))
+										await databaseContext.Save(ct).ConfigureAwait(false);
+								})
+								.ConfigureAwait(false);
+						},
+						cancellationToken)
+						.ConfigureAwait(false);
 
 					api.Origin = model.Origin;
 					api.Reference = model.Reference;
@@ -249,16 +180,16 @@ namespace Tgstation.Server.Host.Controllers
 		}
 
 		/// <summary>
-		/// Delete the <see cref="Repository"/>.
+		/// Delete the repository.
 		/// </summary>
-		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation</param>
-		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> of the operation</returns>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> of the operation.</returns>
 		/// <response code="202">Job to delete the repository created successfully.</response>
 		/// <response code="410">The database entity for the requested instance could not be retrieved. The instance was likely detached.</response>
 		[HttpDelete]
 		[TgsAuthorize(RepositoryRights.Delete)]
-		[ProducesResponseType(typeof(Repository), 202)]
-		[ProducesResponseType(typeof(ErrorMessage), 410)]
+		[ProducesResponseType(typeof(RepositoryResponse), 202)]
+		[ProducesResponseType(typeof(ErrorMessageResponse), 410)]
 		public async Task<IActionResult> Delete(CancellationToken cancellationToken)
 		{
 			var currentModel = await DatabaseContext
@@ -276,13 +207,13 @@ namespace Tgstation.Server.Host.Controllers
 
 			await DatabaseContext.Save(cancellationToken).ConfigureAwait(false);
 
-			Logger.LogInformation("Instance {0} repository delete initiated by user {1}", Instance.Id, AuthenticationContext.User.Id);
+			Logger.LogInformation("Instance {0} repository delete initiated by user {1}", Instance.Id, AuthenticationContext.User.Id.Value);
 
-			var job = new Models.Job
+			var job = new Job
 			{
 				Description = "Delete repository",
 				StartedBy = AuthenticationContext.User,
-				Instance = Instance
+				Instance = Instance,
 			};
 			var api = currentModel.ToApi();
 			await jobManager.RegisterOperation(
@@ -295,18 +226,18 @@ namespace Tgstation.Server.Host.Controllers
 		}
 
 		/// <summary>
-		/// Get <see cref="Repository"/> status.
+		/// Get the repository's status.
 		/// </summary>
 		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
 		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> of the operation.</returns>
-		/// <response code="200">Retrieved the <see cref="Repository"/> settings successfully.</response>
-		/// <response code="201">Retrieved the <see cref="Repository"/> settings successfully, though they did not previously exist.</response>
+		/// <response code="200">Retrieved the repository settings successfully.</response>
+		/// <response code="201">Retrieved the repository settings successfully, though they did not previously exist.</response>
 		/// <response code="410">The database entity for the requested instance could not be retrieved. The instance was likely detached.</response>
 		[HttpGet]
 		[TgsAuthorize(RepositoryRights.Read)]
-		[ProducesResponseType(typeof(Repository), 200)]
-		[ProducesResponseType(typeof(Repository), 201)]
-		[ProducesResponseType(typeof(ErrorMessage), 410)]
+		[ProducesResponseType(typeof(RepositoryResponse), 200)]
+		[ProducesResponseType(typeof(RepositoryResponse), 201)]
+		[ProducesResponseType(typeof(RepositoryResponse), 410)]
 		public async Task<IActionResult> Read(CancellationToken cancellationToken)
 		{
 			var currentModel = await DatabaseContext
@@ -327,10 +258,10 @@ namespace Tgstation.Server.Host.Controllers
 					var repoManager = instance.RepositoryManager;
 
 					if (repoManager.CloneInProgress)
-						return Conflict(new ErrorMessage(ErrorCode.RepoCloning));
+						return Conflict(new ErrorMessageResponse(ErrorCode.RepoCloning));
 
 					if (repoManager.InUse)
-						return Conflict(new ErrorMessage(ErrorCode.RepoBusy));
+						return Conflict(new ErrorMessageResponse(ErrorCode.RepoBusy));
 
 					using var repo = await repoManager.LoadRepository(cancellationToken).ConfigureAwait(false);
 					if (repo != null && await PopulateApi(api, repo, DatabaseContext, Instance, cancellationToken).ConfigureAwait(false))
@@ -346,42 +277,42 @@ namespace Tgstation.Server.Host.Controllers
 		}
 
 		/// <summary>
-		/// Perform updats to the <see cref="Repository"/>.
+		/// Perform updates to the repository.
 		/// </summary>
-		/// <param name="model">The updated <see cref="Repository"/>.</param>
+		/// <param name="model">The <see cref="RepositoryUpdateRequest"/>.</param>
 		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
 		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> of the operation.</returns>
-		/// <response code="200">Updated the <see cref="Repository"/> settings successfully.</response>
-		/// <response code="202">Updated the <see cref="Repository"/> settings successfully and a <see cref="Api.Models.Job"/> was created to make the requested git changes.</response>
+		/// <response code="200">Updated the repository settings successfully.</response>
+		/// <response code="202">Updated the repository settings successfully and a <see cref="JobResponse"/> was created to make the requested git changes.</response>
 		/// <response code="410">The database entity for the requested instance could not be retrieved. The instance was likely detached.</response>
 		[HttpPost]
 		[TgsAuthorize(RepositoryRights.ChangeAutoUpdateSettings | RepositoryRights.ChangeCommitter | RepositoryRights.ChangeCredentials | RepositoryRights.ChangeTestMergeCommits | RepositoryRights.MergePullRequest | RepositoryRights.SetReference | RepositoryRights.SetSha | RepositoryRights.UpdateBranch)]
-		[ProducesResponseType(typeof(Repository), 200)]
-		[ProducesResponseType(typeof(Repository), 202)]
-		[ProducesResponseType(typeof(ErrorMessage), 410)]
+		[ProducesResponseType(typeof(RepositoryResponse), 200)]
+		[ProducesResponseType(typeof(RepositoryResponse), 202)]
+		[ProducesResponseType(typeof(ErrorMessageResponse), 410)]
 #pragma warning disable CA1502, CA1505 // TODO: Decomplexify
-		public async Task<IActionResult> Update([FromBody] Repository model, CancellationToken cancellationToken)
+		public async Task<IActionResult> Update([FromBody] RepositoryUpdateRequest model, CancellationToken cancellationToken)
 		{
 			if (model == null)
 				throw new ArgumentNullException(nameof(model));
 
 			if (model.AccessUser == null ^ model.AccessToken == null)
-				return BadRequest(new ErrorMessage(ErrorCode.RepoMismatchUserAndAccessToken));
+				return BadRequest(new ErrorMessageResponse(ErrorCode.RepoMismatchUserAndAccessToken));
 
 			if (model.CheckoutSha != null && model.Reference != null)
-				return BadRequest(new ErrorMessage(ErrorCode.RepoMismatchShaAndReference));
+				return BadRequest(new ErrorMessageResponse(ErrorCode.RepoMismatchShaAndReference));
 
 			if (model.CheckoutSha != null && model.UpdateFromOrigin == true)
-				return BadRequest(new ErrorMessage(ErrorCode.RepoMismatchShaAndUpdate));
+				return BadRequest(new ErrorMessageResponse(ErrorCode.RepoMismatchShaAndUpdate));
 
 			if (model.NewTestMerges?.Any(x => model.NewTestMerges.Any(y => x != y && x.Number == y.Number)) == true)
-				return BadRequest(new ErrorMessage(ErrorCode.RepoDuplicateTestMerge));
+				return BadRequest(new ErrorMessageResponse(ErrorCode.RepoDuplicateTestMerge));
 
 			if (model.CommitterName?.Length == 0)
-				return BadRequest(new ErrorMessage(ErrorCode.RepoWhitespaceCommitterName));
+				return BadRequest(new ErrorMessageResponse(ErrorCode.RepoWhitespaceCommitterName));
 
 			if (model.CommitterEmail?.Length == 0)
-				return BadRequest(new ErrorMessage(ErrorCode.RepoWhitespaceCommitterEmail));
+				return BadRequest(new ErrorMessageResponse(ErrorCode.RepoWhitespaceCommitterEmail));
 
 			var newTestMerges = model.NewTestMerges != null && model.NewTestMerges.Count > 0;
 			var userRights = (RepositoryRights)AuthenticationContext.GetRight(RightsType.Repository);
@@ -420,12 +351,13 @@ namespace Tgstation.Server.Host.Controllers
 				|| CheckModified(x => x.CommitterEmail, RepositoryRights.ChangeCommitter)
 				|| CheckModified(x => x.CommitterName, RepositoryRights.ChangeCommitter)
 				|| CheckModified(x => x.PushTestMergeCommits, RepositoryRights.ChangeTestMergeCommits)
+				|| CheckModified(x => x.CreateGitHubDeployments, RepositoryRights.ChangeTestMergeCommits)
 				|| CheckModified(x => x.ShowTestMergeCommitters, RepositoryRights.ChangeTestMergeCommits)
 				|| CheckModified(x => x.PostTestMergeComment, RepositoryRights.ChangeTestMergeCommits)
 				|| (model.UpdateFromOrigin == true && !userRights.HasFlag(RepositoryRights.UpdateBranch)))
 				return Forbid();
 
-			if (currentModel.AccessToken?.Length == 0 && currentModel.AccessUser?.Length == 0)
+			if (model.AccessToken?.Length == 0 && model.AccessUser?.Length == 0)
 			{
 				// setting an empty string clears everything
 				currentModel.AccessUser = null;
@@ -434,7 +366,7 @@ namespace Tgstation.Server.Host.Controllers
 
 			var canRead = userRights.HasFlag(RepositoryRights.Read);
 
-			var api = canRead ? currentModel.ToApi() : new Repository();
+			var api = canRead ? currentModel.ToApi() : new RepositoryResponse();
 			if (canRead)
 			{
 				var earlyOut = await WithComponentInstance(
@@ -442,18 +374,15 @@ namespace Tgstation.Server.Host.Controllers
 				{
 					var repoManager = instance.RepositoryManager;
 					if (repoManager.CloneInProgress)
-						return Conflict(new ErrorMessage(ErrorCode.RepoCloning));
+						return Conflict(new ErrorMessageResponse(ErrorCode.RepoCloning));
 
 					if (repoManager.InUse)
-						return Conflict(new ErrorMessage(ErrorCode.RepoBusy));
+						return Conflict(new ErrorMessageResponse(ErrorCode.RepoBusy));
 
 					using var repo = await repoManager.LoadRepository(cancellationToken).ConfigureAwait(false);
 					if (repo == null)
-						return Conflict(new ErrorMessage(ErrorCode.RepoMissing));
+						return Conflict(new ErrorMessageResponse(ErrorCode.RepoMissing));
 					await PopulateApi(api, repo, DatabaseContext, Instance, cancellationToken).ConfigureAwait(false);
-
-					if (model.Origin != null && model.Origin != repo.Origin)
-						return BadRequest(new ErrorMessage(ErrorCode.RepoCantChangeOrigin));
 
 					return null;
 				})
@@ -479,12 +408,28 @@ namespace Tgstation.Server.Host.Controllers
 				description = String.Format(CultureInfo.InvariantCulture, "Checkout repository {0} {1}", model.Reference != null ? "reference" : "SHA", model.Reference ?? model.CheckoutSha);
 
 			if (newTestMerges)
-				description = String.Format(CultureInfo.InvariantCulture, "{0}est merge pull request(s) {1}{2}",
-					description != null ? String.Format(CultureInfo.InvariantCulture, "{0} and t", description) : "T",
-					String.Join(", ", model.NewTestMerges.Select(x =>
-					String.Format(CultureInfo.InvariantCulture, "#{0}{1}", x.Number,
-					x.PullRequestRevision != null ? String.Format(CultureInfo.InvariantCulture, " at {0}", x.PullRequestRevision.Substring(0, 7)) : String.Empty))),
-					description != null ? String.Empty : " in repository");
+				description = String.Format(
+					CultureInfo.InvariantCulture,
+					"{0}est merge(s) {1}{2}",
+					description != null
+						? String.Format(CultureInfo.InvariantCulture, "{0} and t", description)
+						: "T",
+					String.Join(
+						", ",
+						model.NewTestMerges.Select(
+							x => String.Format(
+								CultureInfo.InvariantCulture,
+								"#{0}{1}",
+								x.Number,
+								x.TargetCommitSha != null
+									? String.Format(
+										CultureInfo.InvariantCulture,
+										" at {0}",
+										x.TargetCommitSha.Substring(0, 7))
+									: String.Empty))),
+					description != null
+						? String.Empty
+						: " in repository");
 
 			if (description == null)
 				return Json(api); // no git changes
@@ -506,7 +451,7 @@ namespace Tgstation.Server.Host.Controllers
 				var startSha = repo.Head;
 				string postUpdateSha = null;
 
-				if (newTestMerges && !repo.IsGitHubRepository)
+				if (newTestMerges && repo.RemoteGitProvider == RemoteGitProvider.Unknown)
 					throw new JobException(ErrorCode.RepoUnsupportedTestMergeRemote);
 
 				var committerName = currentModel.ShowTestMergeCommitters.Value
@@ -532,7 +477,7 @@ namespace Tgstation.Server.Host.Controllers
 
 				var attachedInstance = new Models.Instance
 				{
-					Id = Instance.Id
+					Id = Instance.Id,
 				};
 
 				Task CallLoadRevInfo(Models.TestMerge testMergeToAdd = null, string lastOriginCommitSha = null) => databaseContextFactory
@@ -556,9 +501,9 @@ namespace Tgstation.Server.Host.Controllers
 								var mergedBy = databaseContext.Users.Local.FirstOrDefault(x => x.Id == AuthenticationContext.User.Id);
 								if (mergedBy == default)
 								{
-									mergedBy = new Models.User
+									mergedBy = new User
 									{
-										Id = AuthenticationContext.User.Id
+										Id = AuthenticationContext.User.Id,
 									};
 
 									databaseContext.Users.Attach(mergedBy);
@@ -571,7 +516,7 @@ namespace Tgstation.Server.Host.Controllers
 
 								lastRevisionInfo.ActiveTestMerges.Add(new RevInfoTestMerge
 								{
-									TestMerge = testMergeToAdd
+									TestMerge = testMergeToAdd,
 								});
 								lastRevisionInfo.PrimaryTestMerge = testMergeToAdd;
 
@@ -601,11 +546,19 @@ namespace Tgstation.Server.Host.Controllers
 							var fastForward = await repo.MergeOrigin(committerName, currentModel.CommitterEmail, NextProgressReporter(), ct).ConfigureAwait(false);
 							if (!fastForward.HasValue)
 								throw new JobException(ErrorCode.RepoMergeConflict);
+							lastRevisionInfo.OriginCommitSha = await repo.GetOriginSha(cancellationToken).ConfigureAwait(false);
 							await UpdateRevInfo().ConfigureAwait(false);
 							if (fastForward.Value)
 							{
-								lastRevisionInfo.OriginCommitSha = repo.Head;
-								await repo.Sychronize(currentModel.AccessUser, currentModel.AccessToken, currentModel.CommitterName, currentModel.CommitterEmail, NextProgressReporter(), true, ct).ConfigureAwait(false);
+								await repo.Sychronize(
+									currentModel.AccessUser,
+									currentModel.AccessToken,
+									currentModel.CommitterName,
+									currentModel.CommitterEmail,
+									NextProgressReporter(),
+									true,
+									ct)
+									.ConfigureAwait(false);
 								postUpdateSha = repo.Head;
 							}
 							else
@@ -641,7 +594,15 @@ namespace Tgstation.Server.Host.Controllers
 							if (!repo.Tracking)
 								throw new JobException(ErrorCode.RepoReferenceNotTracking);
 							await repo.ResetToOrigin(NextProgressReporter(), ct).ConfigureAwait(false);
-							await repo.Sychronize(currentModel.AccessUser, currentModel.AccessToken, currentModel.CommitterName, currentModel.CommitterEmail, NextProgressReporter(), true, ct).ConfigureAwait(false);
+							await repo.Sychronize(
+								currentModel.AccessUser,
+								currentModel.AccessToken,
+								currentModel.CommitterName,
+								currentModel.CommitterEmail,
+								NextProgressReporter(),
+								true,
+								ct)
+								.ConfigureAwait(false);
 							await CallLoadRevInfo().ConfigureAwait(false);
 
 							// repo head is on origin so force this
@@ -651,47 +612,42 @@ namespace Tgstation.Server.Host.Controllers
 					}
 
 					// test merging
-					Dictionary<int, Octokit.PullRequest> prMap = null;
 					if (newTestMerges)
 					{
+						if (repo.RemoteGitProvider == RemoteGitProvider.Unknown)
+							throw new JobException(ErrorCode.RepoTestMergeInvalidRemote);
+
 						// bit of sanitization
-						foreach (var I in model.NewTestMerges.Where(x => String.IsNullOrWhiteSpace(x.PullRequestRevision)))
-							I.PullRequestRevision = null;
+						foreach (var newTestMergeWithoutTargetCommitSha in model.NewTestMerges.Where(x => String.IsNullOrWhiteSpace(x.TargetCommitSha)))
+							newTestMergeWithoutTargetCommitSha.TargetCommitSha = null;
 
 						var gitHubClient = currentModel.AccessToken != null
 							? gitHubClientFactory.CreateClient(currentModel.AccessToken)
-							: (String.IsNullOrEmpty(generalConfiguration.GitHubAccessToken)
-								? gitHubClientFactory.CreateClient()
-								: gitHubClientFactory.CreateClient(generalConfiguration.GitHubAccessToken));
+							: gitHubClientFactory.CreateClient();
 
-						var repoOwner = repo.GitHubOwner;
-						var repoName = repo.GitHubRepoName;
+						var repoOwner = repo.RemoteRepositoryOwner;
+						var repoName = repo.RemoteRepositoryName;
 
 						// optimization: if we've already merged these exact same commits in this fashion before, just find the rev info for it and check it out
 						Models.RevisionInformation revInfoWereLookingFor = null;
 						bool needToApplyRemainingPrs = true;
 						if (lastRevisionInfo.OriginCommitSha == lastRevisionInfo.CommitSha)
 						{
-							// In order for this to work though we need the shas of all the commits
-							if (model.NewTestMerges.Any(x => x.PullRequestRevision == null))
-								prMap = new Dictionary<int, Octokit.PullRequest>();
-
 							bool cantSearch = false;
-							foreach (var I in model.NewTestMerges)
+							foreach (var newTestMerge in model.NewTestMerges)
 							{
-								if (I.PullRequestRevision != null)
+								if (newTestMerge.TargetCommitSha != null)
 #pragma warning disable CA1308 // Normalize strings to uppercase
-									I.PullRequestRevision = I.PullRequestRevision?.ToLowerInvariant(); // ala libgit2
+									newTestMerge.TargetCommitSha = newTestMerge.TargetCommitSha?.ToLowerInvariant(); // ala libgit2
 #pragma warning restore CA1308 // Normalize strings to uppercase
 								else
 									try
 									{
 										// retrieve the latest sha
-										var pr = await gitHubClient.PullRequest.Get(repoOwner, repoName, I.Number)
-											.WithToken(ct)
-											.ConfigureAwait(false);
-										prMap.Add(I.Number, pr);
-										I.PullRequestRevision = pr.Head.Sha;
+										var pr = await repo.GetTestMerge(newTestMerge, currentModel, ct).ConfigureAwait(false);
+
+										// we want to take the earliest truth possible to prevent RCEs, if this fails AddTestMerge will set it
+										newTestMerge.TargetCommitSha = pr.TargetCommitSha;
 									}
 									catch
 									{
@@ -724,45 +680,71 @@ namespace Tgstation.Server.Host.Controllers
 									&& x.ActiveTestMerges.Select(y => y.TestMerge)
 									.All(y => model.NewTestMerges.Any(z =>
 									y.Number == z.Number
-									&& y.PullRequestRevision.StartsWith(z.PullRequestRevision, StringComparison.Ordinal)
+									&& y.TargetCommitSha.StartsWith(z.TargetCommitSha, StringComparison.Ordinal)
 									&& (y.Comment?.Trim().ToUpperInvariant() == z.Comment?.Trim().ToUpperInvariant() || z.Comment == null))))
 									.FirstOrDefault();
 
 								if (revInfoWereLookingFor == default && model.NewTestMerges.Count > 1)
 								{
 									// okay try to add at least SOME prs we've seen before
-									var search = model.NewTestMerges.ToList();
+									var listedNewTestMerges = model.NewTestMerges.ToList();
 
 									var appliedTestMergeIds = new List<long>();
 
 									Models.RevisionInformation lastGoodRevInfo = null;
 									do
 									{
-										foreach (var I in search)
+										foreach (var newTestMergeParameters in listedNewTestMerges)
 										{
 											revInfoWereLookingFor = dbPull
-												.Where(x => model.NewTestMerges.Any(z =>
-												x.PrimaryTestMerge.Number == z.Number
-												&& x.PrimaryTestMerge.PullRequestRevision.StartsWith(z.PullRequestRevision, StringComparison.Ordinal)
-												&& (x.PrimaryTestMerge.Comment?.Trim().ToUpperInvariant() == z.Comment?.Trim().ToUpperInvariant() || z.Comment == null))
-												&& x.ActiveTestMerges.Select(y => y.TestMerge).All(y => appliedTestMergeIds.Contains(y.Id)))
+												.Where(testRevInfo =>
+												{
+													if (testRevInfo.PrimaryTestMerge == null)
+														return false;
+
+													var testMergeMatch = model.NewTestMerges.Any(testTestMerge =>
+													{
+														var numberMatch = testRevInfo.PrimaryTestMerge.Number == testTestMerge.Number;
+														if (!numberMatch)
+															return false;
+
+														var shaMatch = testRevInfo.PrimaryTestMerge.TargetCommitSha.StartsWith(
+															testTestMerge.TargetCommitSha,
+															StringComparison.Ordinal);
+														if (!shaMatch)
+															return false;
+
+														var commentMatch = testRevInfo.PrimaryTestMerge.Comment == testTestMerge.Comment;
+														return commentMatch;
+													});
+
+													if (!testMergeMatch)
+														return false;
+
+													var previousTestMergesMatch = testRevInfo
+														.ActiveTestMerges
+														.Select(previousRevInfoTestMerge => previousRevInfoTestMerge.TestMerge)
+														.All(previousTestMerge => appliedTestMergeIds.Contains(previousTestMerge.Id));
+
+													return previousTestMergesMatch;
+												})
 												.FirstOrDefault();
 
 											if (revInfoWereLookingFor != null)
 											{
 												lastGoodRevInfo = revInfoWereLookingFor;
 												appliedTestMergeIds.Add(revInfoWereLookingFor.PrimaryTestMerge.Id);
-												search.Remove(I);
+												listedNewTestMerges.Remove(newTestMergeParameters);
 												break;
 											}
 										}
 									}
-									while (revInfoWereLookingFor != null && search.Count > 0);
+									while (revInfoWereLookingFor != null && listedNewTestMerges.Count > 0);
 
 									revInfoWereLookingFor = lastGoodRevInfo;
-									needToApplyRemainingPrs = search.Count != 0;
+									needToApplyRemainingPrs = listedNewTestMerges.Count != 0;
 									if (needToApplyRemainingPrs)
-										model.NewTestMerges = search;
+										model.NewTestMerges = listedNewTestMerges;
 								}
 								else if (revInfoWereLookingFor != null)
 									needToApplyRemainingPrs = false;
@@ -779,52 +761,15 @@ namespace Tgstation.Server.Host.Controllers
 
 						if (needToApplyRemainingPrs)
 						{
-							foreach (var I in model.NewTestMerges)
+							foreach (var newTestMerge in model.NewTestMerges)
 							{
-								Octokit.PullRequest pr = null;
-								string errorMessage = null;
-
-								if (lastRevisionInfo.ActiveTestMerges.Any(x => x.TestMerge.Number == I.Number))
+								if (lastRevisionInfo.ActiveTestMerges.Any(x => x.TestMerge.Number == newTestMerge.Number))
 									throw new JobException(ErrorCode.RepoDuplicateTestMerge);
 
-								Exception exception = null;
-								try
-								{
-									// load from cache if possible
-									if (prMap == null || !prMap.TryGetValue(I.Number, out pr))
-										pr = await gitHubClient
-											.PullRequest
-											.Get(repoOwner, repoName, I.Number)
-											.WithToken(ct)
-											.ConfigureAwait(false);
-								}
-								catch (Octokit.RateLimitExceededException ex)
-								{
-									// you look at your anonymous access and sigh
-									errorMessage = "REMOTE API ERROR: RATE LIMITED";
-									exception = ex;
-								}
-								catch (Octokit.AuthorizationException ex)
-								{
-									errorMessage = "REMOTE API ERROR: BAD CREDENTIALS";
-									exception = ex;
-								}
-								catch (Octokit.NotFoundException ex)
-								{
-									// you look at your shithub and sigh
-									errorMessage = "REMOTE API ERROR: PULL REQUEST NOT FOUND";
-									exception = ex;
-								}
-
-								if (exception != null)
-									Logger.LogWarning(exception, "Error retrieving pull request metadata!");
-
-								// we want to take the earliest truth possible to prevent RCEs, if this fails AddTestMerge will set it
-								if (I.PullRequestRevision == null && pr != null)
-									I.PullRequestRevision = pr.Head.Sha;
+								var fullTestMergeTask = repo.GetTestMerge(newTestMerge, currentModel, ct);
 
 								var mergeResult = await repo.AddTestMerge(
-									I,
+									newTestMerge,
 									committerName,
 									currentModel.CommitterEmail,
 									currentModel.AccessUser,
@@ -832,36 +777,56 @@ namespace Tgstation.Server.Host.Controllers
 									NextProgressReporter(),
 									ct).ConfigureAwait(false);
 
-								if (!mergeResult.HasValue)
+								if (mergeResult == null)
 									throw new JobException(
 										ErrorCode.RepoTestMergeConflict,
 										new JobException(
-											$"Merge of PR #{I.Number} at {I.PullRequestRevision.Substring(0, 7)} conflicted!"));
+											$"Test Merge #{newTestMerge.Number} at {newTestMerge.TargetCommitSha.Substring(0, 7)} conflicted!"));
 
-								++doneSteps;
+								Models.TestMerge fullTestMerge;
+								try
+								{
+									fullTestMerge = await fullTestMergeTask.ConfigureAwait(false);
+								}
+								catch (Exception ex)
+								{
+									Logger.LogWarning("Error retrieving metadata for test merge #{0}!", newTestMerge.Number);
+
+									fullTestMerge = new Models.TestMerge
+									{
+										Author = ex.Message,
+										BodyAtMerge = ex.Message,
+										MergedAt = DateTimeOffset.UtcNow,
+										TitleAtMerge = ex.Message,
+										Comment = newTestMerge.Comment,
+										Number = newTestMerge.Number,
+										Url = ex.Message,
+									};
+								}
+
+								// Ensure we're getting the full sha from git itself
+								fullTestMerge.TargetCommitSha = newTestMerge.TargetCommitSha;
 
 								// MergedBy will be set later
-								var tm = new Models.TestMerge
-								{
-									Author = pr?.User.Login ?? errorMessage,
-									BodyAtMerge = pr?.Body ?? errorMessage ?? String.Empty,
-									MergedAt = DateTimeOffset.Now,
-									TitleAtMerge = pr?.Title ?? errorMessage ?? String.Empty,
-									Comment = I.Comment,
-									Number = I.Number,
-									PullRequestRevision = I.PullRequestRevision,
-									Url = pr?.HtmlUrl ?? errorMessage
-								};
+								++doneSteps;
 
-								await UpdateRevInfo(tm).ConfigureAwait(false);
+								await UpdateRevInfo(fullTestMerge).ConfigureAwait(false);
 							}
 						}
 					}
 
 					var currentHead = repo.Head;
-					if (startSha != currentHead || (postUpdateSha != null && postUpdateSha != currentHead))
+					if (currentModel.PushTestMergeCommits.Value && (startSha != currentHead || (postUpdateSha != null && postUpdateSha != currentHead)))
 					{
-						await repo.Sychronize(currentModel.AccessUser, currentModel.AccessToken, currentModel.CommitterName, currentModel.CommitterEmail, NextProgressReporter(), false, ct).ConfigureAwait(false);
+						await repo.Sychronize(
+							currentModel.AccessUser,
+							currentModel.AccessToken,
+							currentModel.CommitterName,
+							currentModel.CommitterEmail,
+							NextProgressReporter(),
+							false,
+							ct)
+							.ConfigureAwait(false);
 						await UpdateRevInfo().ConfigureAwait(false);
 					}
 
@@ -883,7 +848,7 @@ namespace Tgstation.Server.Host.Controllers
 				}
 			}
 
-			var job = new Models.Job
+			var job = new Job
 			{
 				Description = description,
 				StartedBy = AuthenticationContext.User,
@@ -907,6 +872,99 @@ namespace Tgstation.Server.Host.Controllers
 			api.ActiveJob = job.ToApi();
 			return Accepted(api);
 		}
-		#pragma warning restore CA1502, CA1505
+#pragma warning restore CA1502, CA1505
+
+		/// <summary>
+		/// Load the <see cref="RevisionInformation"/> for the current <paramref name="repository"/> state into a given <paramref name="databaseContext"/>.
+		/// </summary>
+		/// <param name="repository">The <see cref="Components.Repository.IRepository"/>.</param>
+		/// <param name="databaseContext">The active <see cref="IDatabaseContext"/>.</param>
+		/// <param name="instance">The active <see cref="Models.Instance"/>.</param>
+		/// <param name="lastOriginCommitSha">The last known origin commit SHA of the <paramref name="repository"/> if any.</param>
+		/// <param name="revInfoSink">An optional <see cref="Action{T}"/> to receive the loaded <see cref="RevisionInformation"/>.</param>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="Task{TResult}"/> resulting in <see langword="true"/> if the <paramref name="databaseContext"/> was modified in a way that requires saving, <see langword="false"/> otherwise.</returns>
+		async Task<bool> LoadRevisionInformation(
+			Components.Repository.IRepository repository,
+			IDatabaseContext databaseContext,
+			Models.Instance instance,
+			string lastOriginCommitSha,
+			Action<Models.RevisionInformation> revInfoSink,
+			CancellationToken cancellationToken)
+		{
+			var repoSha = repository.Head;
+
+			IQueryable<Models.RevisionInformation> ApplyQuery(IQueryable<Models.RevisionInformation> query) => query
+				.Where(x => x.CommitSha == repoSha && x.Instance.Id == instance.Id)
+				.Include(x => x.CompileJobs)
+				.Include(x => x.ActiveTestMerges).ThenInclude(x => x.TestMerge).ThenInclude(x => x.MergedBy);
+
+			var revisionInfo = await ApplyQuery(databaseContext.RevisionInformations).FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
+
+			// If the DB doesn't have it, check the local set
+			if (revisionInfo == default)
+				revisionInfo = databaseContext
+					.RevisionInformations
+					.Local
+					.Where(x => x.CommitSha == repoSha && x.Instance.Id == instance.Id)
+					.FirstOrDefault();
+
+			var needsDbUpdate = revisionInfo == default;
+			if (needsDbUpdate)
+			{
+				// needs insertion
+				revisionInfo = new Models.RevisionInformation
+				{
+					Instance = instance,
+					CommitSha = repoSha,
+					Timestamp = await repository.TimestampCommit(repoSha, cancellationToken).ConfigureAwait(false),
+					CompileJobs = new List<CompileJob>(),
+					ActiveTestMerges = new List<RevInfoTestMerge>(), // non null vals for api returns
+				};
+
+				lock (databaseContext) // cleaner this way
+					databaseContext.RevisionInformations.Add(revisionInfo);
+			}
+
+			revisionInfo.OriginCommitSha ??= lastOriginCommitSha;
+			if (revisionInfo.OriginCommitSha == null)
+			{
+				revisionInfo.OriginCommitSha = repoSha;
+				Logger.LogInformation(Components.Repository.Repository.OriginTrackingErrorTemplate, repoSha);
+			}
+
+			revInfoSink?.Invoke(revisionInfo);
+			return needsDbUpdate;
+		}
+
+		/// <summary>
+		/// Populate a given <paramref name="apiResponse"/> with the current state of a given <paramref name="repository"/>.
+		/// </summary>
+		/// <param name="apiResponse">The <see cref="RepositoryResponse"/> to populate.</param>
+		/// <param name="repository">The <see cref="Components.Repository.IRepository"/>.</param>
+		/// <param name="databaseContext">The active <see cref="IDatabaseContext"/>.</param>
+		/// <param name="instance">The active <see cref="Models.Instance"/>.</param>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="Task{TResult}"/> resulting in <see langword="true"/> if the <paramref name="databaseContext"/> was modified in a way that requires saving, <see langword="false"/> otherwise.</returns>
+		async Task<bool> PopulateApi(
+			RepositoryResponse apiResponse,
+			Components.Repository.IRepository repository,
+			IDatabaseContext databaseContext,
+			Models.Instance instance,
+			CancellationToken cancellationToken)
+		{
+			apiResponse.RemoteGitProvider = repository.RemoteGitProvider;
+			apiResponse.RemoteRepositoryOwner = repository.RemoteRepositoryOwner;
+			apiResponse.RemoteRepositoryName = repository.RemoteRepositoryName;
+
+			apiResponse.Origin = repository.Origin;
+			apiResponse.Reference = repository.Reference;
+
+			// rev info stuff
+			Models.RevisionInformation revisionInfo = null;
+			var needsDbUpdate = await LoadRevisionInformation(repository, databaseContext, instance, null, x => revisionInfo = x, cancellationToken).ConfigureAwait(false);
+			apiResponse.RevisionInformation = revisionInfo.ToApi();
+			return needsDbUpdate;
+		}
 	}
 }

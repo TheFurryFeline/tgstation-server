@@ -1,15 +1,19 @@
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
-using System;
+﻿using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
+using Tgstation.Server.Api;
 using Tgstation.Server.Api.Rights;
 using Tgstation.Server.Host.Configuration;
 using Tgstation.Server.Host.Models;
 using Tgstation.Server.Host.Security;
 using Tgstation.Server.Host.System;
+
 using Z.EntityFramework.Plus;
 
 namespace Tgstation.Server.Host.Database
@@ -18,7 +22,7 @@ namespace Tgstation.Server.Host.Database
 	sealed class DatabaseSeeder : IDatabaseSeeder
 	{
 		/// <summary>
-		/// The <see cref="ICryptographySuite"/> for the <see cref="DatabaseSeeder"/>
+		/// The <see cref="ICryptographySuite"/> for the <see cref="DatabaseSeeder"/>.
 		/// </summary>
 		readonly ICryptographySuite cryptographySuite;
 
@@ -48,13 +52,38 @@ namespace Tgstation.Server.Host.Database
 		readonly DatabaseConfiguration databaseConfiguration;
 
 		/// <summary>
-		/// Construct a <see cref="DatabaseSeeder"/>
+		/// Add a default system <see cref="User"/> to a given <paramref name="databaseContext"/>.
 		/// </summary>
-		/// <param name="cryptographySuite">The value of <see cref="cryptographySuite"/></param>
+		/// <param name="databaseContext">The <see cref="IDatabaseContext"/> to add a system <see cref="User"/> to.</param>
+		/// <param name="tgsUser">An existing <see cref="User"/>, if any.</param>
+		/// <returns>The created system <see cref="User"/>.</returns>
+		static User SeedSystemUser(IDatabaseContext databaseContext, User tgsUser = null)
+		{
+			bool alreadyExists = tgsUser != null;
+			tgsUser ??= new User()
+			{
+				CreatedAt = DateTimeOffset.UtcNow,
+				CanonicalName = User.CanonicalizeName(User.TgsSystemUserName),
+			};
+
+			// intentionally not giving a group or permissionset
+			tgsUser.Name = User.TgsSystemUserName;
+			tgsUser.PasswordHash = "_"; // This can't be hashed
+			tgsUser.Enabled = false;
+
+			if (!alreadyExists)
+				databaseContext.Users.Add(tgsUser);
+			return tgsUser;
+		}
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="DatabaseSeeder"/> class.
+		/// </summary>
+		/// <param name="cryptographySuite">The value of <see cref="cryptographySuite"/>.</param>
 		/// <param name="platformIdentifier">The value of <see cref="platformIdentifier"/>.</param>
 		/// <param name="generalConfigurationOptions">The <see cref="IOptions{TOptions}"/> containing the value of <see cref="generalConfiguration"/>.</param>
 		/// <param name="databaseConfigurationOptions">The <see cref="IOptions{TOptions}"/> containing the value of <see cref="databaseConfiguration"/>.</param>
-		/// <param name="databaseLogger">The value of <see cref="databaseLogger"/></param>
+		/// <param name="databaseLogger">The value of <see cref="databaseLogger"/>.</param>
 		/// <param name="logger">The value of <see cref="logger"/>.</param>
 		public DatabaseSeeder(
 			ICryptographySuite cryptographySuite,
@@ -72,59 +101,81 @@ namespace Tgstation.Server.Host.Database
 			this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
 		}
 
-		/// <summary>
-		/// Add a default system <see cref="User"/> to a given <paramref name="databaseContext"/>
-		/// </summary>
-		/// <param name="databaseContext">The <see cref="IDatabaseContext"/> to add a system <see cref="User"/> to</param>
-		/// <param name="tgsUser">An existing <see cref="User"/>, if any.</param>
-		/// <returns>The created system <see cref="User"/>.</returns>
-		static User SeedSystemUser(IDatabaseContext databaseContext, User tgsUser = null)
+		/// <inheritdoc />
+		public async Task Initialize(IDatabaseContext databaseContext, CancellationToken cancellationToken)
 		{
-			bool alreadyExists = tgsUser != null;
-			tgsUser ??= new User()
+			if (databaseContext == null)
+				throw new ArgumentNullException(nameof(databaseContext));
+
+			if (databaseConfiguration.DropDatabase)
 			{
-				CreatedAt = DateTimeOffset.Now,
-				CanonicalName = User.CanonicalizeName(User.TgsSystemUserName),
-			};
+				logger.LogCritical("DropDatabase configuration option set! Dropping any existing database...");
+				await databaseContext.Drop(cancellationToken).ConfigureAwait(false);
+			}
 
-			tgsUser.Name = User.TgsSystemUserName;
-			tgsUser.PasswordHash = "_"; // This can't be hashed
-			tgsUser.Enabled = false;
-			tgsUser.InstanceManagerRights = InstanceManagerRights.None;
-			tgsUser.AdministrationRights = AdministrationRights.None;
+			var wasEmpty = await databaseContext.Migrate(databaseLogger, cancellationToken).ConfigureAwait(false);
+			if (wasEmpty)
+			{
+				logger.LogInformation("Seeding database...");
+				await SeedDatabase(databaseContext, cancellationToken).ConfigureAwait(false);
+			}
+			else
+			{
+				if (databaseConfiguration.ResetAdminPassword)
+				{
+					logger.LogWarning("Enabling and resetting admin password due to configuration!");
+					await ResetAdminPassword(databaseContext, cancellationToken).ConfigureAwait(false);
+				}
 
-			if (!alreadyExists)
-				databaseContext.Users.Add(tgsUser);
-			return tgsUser;
+				await SanitizeDatabase(databaseContext, cancellationToken).ConfigureAwait(false);
+			}
+		}
+
+		/// <inheritdoc />
+		public Task Downgrade(IDatabaseContext databaseContext, Version downgradeVersion, CancellationToken cancellationToken)
+		{
+			if (databaseContext == null)
+				throw new ArgumentNullException(nameof(databaseContext));
+			if (downgradeVersion == null)
+				throw new ArgumentNullException(nameof(downgradeVersion));
+
+			return databaseContext.SchemaDowngradeForServerVersion(
+				databaseLogger,
+				downgradeVersion,
+				databaseConfiguration.DatabaseType,
+				cancellationToken);
 		}
 
 		/// <summary>
-		/// Add a default admin <see cref="User"/> to a given <paramref name="databaseContext"/>
+		/// Add a default admin <see cref="User"/> to a given <paramref name="databaseContext"/>.
 		/// </summary>
-		/// <param name="databaseContext">The <see cref="IDatabaseContext"/> to add an admin <see cref="User"/> to</param>
+		/// <param name="databaseContext">The <see cref="IDatabaseContext"/> to add an admin <see cref="User"/> to.</param>
 		/// <returns>The created admin <see cref="User"/>.</returns>
 		User SeedAdminUser(IDatabaseContext databaseContext)
 		{
 			var admin = new User
 			{
-				AdministrationRights = RightsHelper.AllRights<AdministrationRights>(),
-				CreatedAt = DateTimeOffset.Now,
-				InstanceManagerRights = RightsHelper.AllRights<InstanceManagerRights>(),
-				Name = Api.Models.User.AdminName,
-				CanonicalName = User.CanonicalizeName(Api.Models.User.AdminName),
+				PermissionSet = new PermissionSet
+				{
+					AdministrationRights = RightsHelper.AllRights<AdministrationRights>(),
+					InstanceManagerRights = RightsHelper.AllRights<InstanceManagerRights>(),
+				},
+				CreatedAt = DateTimeOffset.UtcNow,
+				Name = DefaultCredentials.AdminUserName,
+				CanonicalName = User.CanonicalizeName(DefaultCredentials.AdminUserName),
 				Enabled = true,
 			};
-			cryptographySuite.SetUserPassword(admin, Api.Models.User.DefaultAdminPassword, true);
+			cryptographySuite.SetUserPassword(admin, DefaultCredentials.DefaultAdminUserPassword, true);
 			databaseContext.Users.Add(admin);
 			return admin;
 		}
 
 		/// <summary>
-		/// Initially seed a given <paramref name="databaseContext"/>
+		/// Initially seed a given <paramref name="databaseContext"/>.
 		/// </summary>
-		/// <param name="databaseContext">The <see cref="IDatabaseContext"/> to seed</param>
-		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation</param>
-		/// <returns>A <see cref="Task"/> representing the running operation</returns>
+		/// <param name="databaseContext">The <see cref="IDatabaseContext"/> to seed.</param>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="Task"/> representing the running operation.</returns>
 		async Task SeedDatabase(IDatabaseContext databaseContext, CancellationToken cancellationToken)
 		{
 			var adminUser = SeedAdminUser(databaseContext);
@@ -149,11 +200,14 @@ namespace Tgstation.Server.Host.Database
 			var admin = await GetAdminUser(databaseContext, cancellationToken).ConfigureAwait(false);
 			if (admin != null)
 			{
-				// Fix the issue with ulong enums
-				// https://github.com/tgstation/tgstation-server/commit/db341d43b3dab74fe3681f5172ca9bfeaafa6b6d#diff-09f06ec4584665cf89bb77b97f5ccfb9R36-R39
-				// https://github.com/JamesNK/Newtonsoft.Json/issues/2301
-				admin.AdministrationRights &= RightsHelper.AllRights<AdministrationRights>();
-				admin.InstanceManagerRights &= RightsHelper.AllRights<InstanceManagerRights>();
+				if (admin.PermissionSet != null)
+				{
+					// Fix the issue with ulong enums
+					// https://github.com/tgstation/tgstation-server/commit/db341d43b3dab74fe3681f5172ca9bfeaafa6b6d#diff-09f06ec4584665cf89bb77b97f5ccfb9R36-R39
+					// https://github.com/JamesNK/Newtonsoft.Json/issues/2301
+					admin.PermissionSet.AdministrationRights &= RightsHelper.AllRights<AdministrationRights>();
+					admin.PermissionSet.InstanceManagerRights &= RightsHelper.AllRights<InstanceManagerRights>();
+				}
 
 				if (admin.CreatedBy == null)
 				{
@@ -200,7 +254,7 @@ namespace Tgstation.Server.Host.Database
 				{
 					var newDDSettings = new DreamDaemonSettings
 					{
-						Id = id
+						Id = id,
 					};
 
 					databaseContext.DreamDaemonSettings.Attach(newDDSettings);
@@ -218,18 +272,32 @@ namespace Tgstation.Server.Host.Database
 		}
 
 		/// <summary>
-		/// Changes the admin password in <see cref="IDatabaseContext"/> back to it's default and enables the account
+		/// Changes the admin password in <see cref="IDatabaseContext"/> back to it's default, enables the account, and gives it <see cref="AdministrationRights.WriteUsers"/> access.
 		/// </summary>
-		/// <param name="databaseContext">The <see cref="IDatabaseContext"/> to reset the admin password for</param>
-		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation</param>
-		/// <returns>A <see cref="Task"/> representing the running operation</returns>
+		/// <param name="databaseContext">The <see cref="IDatabaseContext"/> to reset the admin password for.</param>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="Task"/> representing the running operation.</returns>
 		async Task ResetAdminPassword(IDatabaseContext databaseContext, CancellationToken cancellationToken)
 		{
 			var admin = await GetAdminUser(databaseContext, cancellationToken).ConfigureAwait(false);
 			if (admin != null)
 			{
 				admin.Enabled = true;
-				cryptographySuite.SetUserPassword(admin, Api.Models.User.DefaultAdminPassword, false);
+
+				// force the user out of any groups
+				if (admin.PermissionSet == null)
+				{
+					admin.Group = null;
+					admin.GroupId = null;
+					admin.PermissionSet = new PermissionSet
+					{
+						InstanceManagerRights = InstanceManagerRights.None,
+						AdministrationRights = AdministrationRights.WriteUsers,
+					};
+				}
+				else
+					admin.PermissionSet.AdministrationRights |= AdministrationRights.WriteUsers;
+				cryptographySuite.SetUserPassword(admin, DefaultCredentials.DefaultAdminUserPassword, false);
 			}
 
 			await databaseContext.Save(cancellationToken).ConfigureAwait(false);
@@ -246,55 +314,16 @@ namespace Tgstation.Server.Host.Database
 			var admin = await databaseContext
 				.Users
 				.AsQueryable()
-				.Where(x => x.CanonicalName == User.CanonicalizeName(Api.Models.User.AdminName))
+				.Where(x => x.CanonicalName == User.CanonicalizeName(DefaultCredentials.AdminUserName))
 				.Include(x => x.CreatedBy)
+				.Include(x => x.PermissionSet)
+				.Include(x => x.Group)
 				.FirstOrDefaultAsync(cancellationToken)
 				.ConfigureAwait(false);
 			if (admin == default)
 				SeedAdminUser(databaseContext);
 
 			return admin;
-		}
-
-		/// <inheritdoc />
-		public async Task Initialize(IDatabaseContext databaseContext, CancellationToken cancellationToken)
-		{
-			if (databaseContext == null)
-				throw new ArgumentNullException(nameof(databaseContext));
-
-			if (databaseConfiguration.DropDatabase)
-			{
-				logger.LogCritical("DropDatabase configuration option set! Dropping any existing database...");
-				await databaseContext.Drop(cancellationToken).ConfigureAwait(false);
-			}
-
-			var wasEmpty = await databaseContext.Migrate(databaseLogger, cancellationToken).ConfigureAwait(false);
-			if (wasEmpty)
-			{
-				logger.LogInformation("Seeding database...");
-				await SeedDatabase(databaseContext, cancellationToken).ConfigureAwait(false);
-			}
-			else
-			{
-				if (databaseConfiguration.ResetAdminPassword)
-				{
-					logger.LogWarning("Enabling and resetting admin password due to configuration!");
-					await ResetAdminPassword(databaseContext, cancellationToken).ConfigureAwait(false);
-				}
-
-				await SanitizeDatabase(databaseContext, cancellationToken).ConfigureAwait(false);
-			}
-		}
-
-		/// <inheritdoc />
-		public Task Downgrade(IDatabaseContext databaseContext, Version downgradeVersion, CancellationToken cancellationToken)
-		{
-			if (databaseContext == null)
-				throw new ArgumentNullException(nameof(databaseContext));
-			if (downgradeVersion == null)
-				throw new ArgumentNullException(nameof(downgradeVersion));
-
-			return databaseContext.SchemaDowngradeForServerVersion(databaseLogger, downgradeVersion, databaseConfiguration.DatabaseType, cancellationToken);
 		}
 	}
 }

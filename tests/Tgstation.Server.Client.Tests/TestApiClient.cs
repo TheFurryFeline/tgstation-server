@@ -1,4 +1,4 @@
-﻿using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
@@ -9,8 +9,10 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Threading;
 using System.Threading.Tasks;
+
 using Tgstation.Server.Api;
 using Tgstation.Server.Api.Models;
+using Tgstation.Server.Api.Models.Response;
 
 namespace Tgstation.Server.Client.Tests
 {
@@ -20,7 +22,7 @@ namespace Tgstation.Server.Client.Tests
 		[TestMethod]
 		public async Task TestDeserializingByondModelsWork()
 		{
-			var sample = new Byond
+			var sample = new ByondResponse
 			{
 				Version = new Version(511, 1385, 0)
 			};
@@ -41,7 +43,7 @@ namespace Tgstation.Server.Client.Tests
 
 			var client = new ApiClient(httpClient.Object, new Uri("http://fake.com"), new ApiHeaders(new ProductHeaderValue("fake"), "fake"), null);
 
-			var result = await client.Read<Byond>(Routes.Byond, default).ConfigureAwait(false);
+			var result = await client.Read<ByondResponse>(Routes.Byond, default).ConfigureAwait(false);
 			Assert.AreEqual(sample.Version, result.Version);
 			Assert.AreEqual(0, result.Version.Build);
 		}
@@ -49,7 +51,7 @@ namespace Tgstation.Server.Client.Tests
 		[TestMethod]
 		public async Task TestUnrecognizedResponse()
 		{
-			var sample = new Byond
+			var sample = new ByondResponse
 			{
 				Version = new Version(511, 1385)
 			};
@@ -66,7 +68,7 @@ namespace Tgstation.Server.Client.Tests
 
 			var client = new ApiClient(httpClient.Object, new Uri("http://fake.com"), new ApiHeaders(new ProductHeaderValue("fake"), "fake"), null);
 
-			await Assert.ThrowsExceptionAsync<UnrecognizedResponseException>(() => client.Read<Byond>(Routes.Byond, default)).ConfigureAwait(false);
+			await Assert.ThrowsExceptionAsync<UnrecognizedResponseException>(() => client.Read<ByondResponse>(Routes.Byond, default)).ConfigureAwait(false);
 		}
 	}
 }

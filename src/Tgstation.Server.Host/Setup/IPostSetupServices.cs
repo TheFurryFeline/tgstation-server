@@ -19,9 +19,19 @@ namespace Tgstation.Server.Host.Setup
 		DatabaseConfiguration DatabaseConfiguration { get; }
 
 		/// <summary>
+		/// The <see cref="Configuration.SecurityConfiguration"/>.
+		/// </summary>
+		SecurityConfiguration SecurityConfiguration { get; }
+
+		/// <summary>
 		/// The <see cref="Configuration.FileLoggingConfiguration"/>.
 		/// </summary>
 		FileLoggingConfiguration FileLoggingConfiguration { get; }
+
+		/// <summary>
+		/// The <see cref="Configuration.ElasticsearchConfiguration"/>.
+		/// </summary>
+		ElasticsearchConfiguration ElasticsearchConfiguration { get; }
 
 		/// <summary>
 		/// The <see cref="IPlatformIdentifier"/>.

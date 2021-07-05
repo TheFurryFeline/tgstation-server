@@ -1,7 +1,7 @@
 ﻿namespace Tgstation.Server.Host.Components.Events
 {
 	/// <summary>
-	/// Types of events. Mirror in tgs.dm
+	/// Types of events. Mirror in tgs.dm.
 	/// </summary>
 	public enum EventType
 	{
@@ -24,14 +24,15 @@
 		RepoFetch,
 
 		/// <summary>
-		/// Parameters: Pull request number, pull request sha, merger message
+		/// Parameters: Test merge number, test merge target sha, merger message
 		/// </summary>
 		[EventScript("RepoMergePullRequest")]
-		RepoMergePullRequest,
+		RepoAddTestMerge,
 
 		/// <summary>
 		/// Parameters: Absolute path to repository root
 		/// </summary>
+		/// <remarks>Changes made to the repository during this event will be pushed to the tracked branch if no test merges are present.</remarks>
 		[EventScript("PreSynchronize")]
 		RepoPreSynchronize,
 
@@ -96,7 +97,7 @@
 		DeploymentComplete,
 
 		/// <summary>
-		/// Before the watchdog shutsdown. Not sent for graceful shutdowns. No parameters.
+		/// Before the watchdog shuts down. Not sent for graceful shutdowns. No parameters.
 		/// </summary>
 		[EventScript("WatchdogShutdown")]
 		WatchdogShutdown,
@@ -111,6 +112,36 @@
 		/// Before the watchdog launches. No parameters.
 		/// </summary>
 		[EventScript("WatchdogLaunch")]
-		WatchdogLaunch
+		WatchdogLaunch,
+
+		/// <summary>
+		/// Watchdog event when DreamDaemon exits unexpectedly. No parameters.
+		/// </summary>
+		[EventScript("WatchdogCrash")]
+		WatchdogCrash,
+
+		/// <summary>
+		/// In between watchdog DreamDaemon restarts if the process has been force-ended by the DMAPI (TgsEndProcess()). No parameters.
+		/// </summary>
+		[EventScript("WorldEndProcess")]
+		WorldEndProcess,
+
+		/// <summary>
+		/// Watchdog event when TgsReboot() is called. Not synchronous. Called after <see cref="WorldEndProcess"/>. No parameters.
+		/// </summary>
+		[EventScript("WorldReboot")]
+		WorldReboot,
+
+		/// <summary>
+		/// Watchdog event when TgsInitializationsComplete() is called. No parameters.
+		/// </summary>
+		[EventScript("WorldPrime")]
+		WorldPrime,
+
+		/// <summary>
+		/// After DD has launched. Not the same as WatchdogLaunch. Parameters: PID of DreamDaemon
+		/// </summary>
+		[EventScript("DreamDaemonLaunch")]
+		DreamDaemonLaunch,
 	}
 }

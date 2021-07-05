@@ -11,26 +11,27 @@ on:
     - master
 
 env:
+  TGS4_DOTNET_VERSION: 3.1.x
   TGS4_TEST_DISCORD_CHANNEL: ${{ secrets.DISCORD_CHANNEL_ID }}
   TGS4_TEST_DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
   TGS4_TEST_IRC_CHANNEL: ${{ secrets.IRC_CHANNEL }}
   TGS4_TEST_IRC_CONNECTION_STRING: ${{ secrets.IRC_CONNECTION_STRING }}
   TGS4_TEST_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  TGS4_RELEASE_NOTES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  TGS4_RELEASE_NOTES_TOKEN: ${{ secrets.DEV_PUSH_TOKEN }}
 
 jobs:
   dmapi-build:
     name: Build DMAPI
     env:
       BYOND_MAJOR: 513
-      BYOND_MINOR: 1527
+      BYOND_MINOR: 1536
     runs-on: ubuntu-latest
     steps:
     - name: Install x86 libc Dependencies
       run: |
         sudo dpkg --add-architecture i386
         sudo apt-get update
-        sudo apt-get install -y libc6-i386 libstdc++6:i386
+        sudo apt-get install -y -o APT::Immediate-Configure=0 libc6-i386 libstdc++6:i386
 
     - name: Install BYOND
       if: steps.cache-byond.outputs.cache-hit != 'true'
@@ -77,10 +78,7 @@ jobs:
       - name: Patch Doxyfile
         run: |
           VERSION=$(cat "build/Version.props" | grep -oPm1 "(?<=<TgsCoreVersion>)[^<]+")
-          echo -e "\nPROJECT_NUMBER = $VERSION\nINPUT = .\nOUTPUT_DIRECTORY = /home/runner/tgsdoxout\nPROJECT_LOGO = ./build/tgs.ico\nHAVE_DOT=YES" >> "docs/Doxyfile"
-
-      - name: Create Doxygen Output Directory
-        run: mkdir -p $HOME/tgsdoxout
+          echo -e "\nPROJECT_NUMBER = $VERSION\nINPUT = .\nOUTPUT_DIRECTORY = ./doxout\nPROJECT_LOGO = ./build/tgs.ico\nHAVE_DOT=YES" >> "docs/Doxyfile"
 
       - name: Doxygen Build
         uses: mattnotmitt/doxygen-action@v1
@@ -91,9 +89,11 @@ jobs:
         if: github.event_name == 'push' && github.event.ref == 'refs/heads/dev'
         run: |
           git clone -b gh-pages --single-branch "https://git@github.com/tgstation/tgstation-server" $HOME/tgsdox
-          cd $HOME/tgsdox
+          pushd $HOME/tgsdox
           rm -r *
-          mv $HOME/tgsdoxout/* ./
+          popd
+          echo ./doxout/* | xargs -n 10 sudo mv -t $HOME/tgsdox
+          cd $HOME/tgsdox
           git config --global push.default simple
           git config user.name "tgstation-server"
           git config user.email "tgstation-server@tgstation13.org"
@@ -105,7 +105,7 @@ jobs:
           echo "Adding files..."
           git add --all
           echo "Committing..."
-          git commit -m "Deploy code docs to GitHub Pages for workflow run ${{ github.run_number }}" -m "Commit: ${{ github.event.head_commit.id }}"
+          git diff-index --quiet HEAD || git commit -m "Deploy code docs to GitHub Pages for workflow run ${{ github.run_number }}" -m "Commit: ${{ github.event.head_commit.id }}"
           echo "Pushing..."
           git push -f "https://${{ secrets.DEV_PUSH_TOKEN }}@github.com/tgstation/tgstation-server" 2>&1
 
@@ -131,10 +131,10 @@ jobs:
       with:
         node-version: 12.x
 
-    - name: Setup dotnet 3.1.X
+    - name: Setup dotnet
       uses: actions/setup-dotnet@v1
       with:
-        dotnet-version: 3.1.x
+        dotnet-version: ${{ env.TGS4_DOTNET_VERSION }}
 
     - name: Checkout
       uses: actions/checkout@v1
@@ -158,8 +158,16 @@ jobs:
         configuration: [ 'Debug', 'Release' ]
     runs-on: windows-latest
     steps:
+    - name: Setup dotnet
+      uses: actions/setup-dotnet@v1
+      with:
+        dotnet-version: ${{ env.TGS4_DOTNET_VERSION }}
+
     - name: Checkout
       uses: actions/checkout@v1
+
+    - name: Clean package cache as a temporary workaround for actions/setup-dotnet#155
+      run: dotnet clean && dotnet nuget locals all --clear
 
     - name: Build
       run: dotnet build -c ${{ matrix.configuration }}
@@ -179,25 +187,49 @@ jobs:
     env:
       TGS4_TEST_DATABASE_TYPE: SqlServer
       TGS4_TEST_DUMP_API_SPEC: yes
+    concurrency: integration-windows-${{ github.head_ref }}
     strategy:
+      max-parallel: 2
       matrix:
         watchdog-type: [ 'Basic', 'System' ]
         configuration: [ 'Debug', 'Release' ]
     runs-on: windows-latest
     steps:
+    - name: Setup dotnet
+      uses: actions/setup-dotnet@v1
+      with:
+        dotnet-version: ${{ env.TGS4_DOTNET_VERSION }}
+
     - name: Set General__UseBasicWatchdog
       if: ${{ matrix.watchdog-type == 'Basic' }}
-      run: echo "::set-env name=General__UseBasicWatchdog::true"
+      run: echo "General__UseBasicWatchdog=true" >> $Env:GITHUB_ENV
 
     - name: Set TGS4_TEST_CONNECTION_STRING
-      run: echo "::set-env name=TGS4_TEST_CONNECTION_STRING::Server=(localdb)\MSSQLLocalDB;Integrated Security=true;Initial Catalog=TGS_${{ matrix.watchdog-type }}_${{ matrix.configuration }};Application Name=tgstation-server"
+      shell: bash
+      run: |
+        TGS4_CONNSTRING_VALUE="Server=(localdb)\MSSQLLocalDB;Integrated Security=true;Initial Catalog=TGS_${{ matrix.watchdog-type }}_${{ matrix.configuration }};Application Name=tgstation-server"
+        echo "TGS4_TEST_CONNECTION_STRING=$(echo $TGS4_CONNSTRING_VALUE)" >> $GITHUB_ENV
 
     - name: Checkout
       uses: actions/checkout@v1
 
     - name: Set TGS4_TEST_PULL_REQUEST_NUMBER
       if: ${{ github.event_name == 'pull_request' }}
-      run: echo "::set-env name=TGS4_TEST_PULL_REQUEST_NUMBER::${{ github.event.number }}"
+      run: echo "TGS4_TEST_PULL_REQUEST_NUMBER=${{ github.event.number }}" >> $Env:GITHUB_ENV
+
+    - name: Set TGS4_GITHUB_REF for PR
+      if: ${{ github.event_name == 'pull_request' }}
+      run: echo "TGS4_GITHUB_REF=${{ github.base_ref }}" >> $Env:GITHUB_ENV
+
+    - name: Set TGS4_GITHUB_REF for push
+      if: ${{ github.event_name == 'push' }}
+      shell: bash
+      run: |
+        TEMP_GITHUB_REF="${{ github.event.ref }}"
+        echo "TGS4_GITHUB_REF=${TEMP_GITHUB_REF##*/}" >> $GITHUB_ENV
+
+    - name: Clean package cache as a temporary workaround for actions/setup-dotnet#155
+      run: dotnet clean && dotnet nuget locals all --clear
 
     - name: Run Integration Test
       run: |
@@ -225,6 +257,7 @@ jobs:
         dotnet publish -c ${{ matrix.configuration }} -o ../../Artifacts/Service
         cd ../Tgstation.Server.Host
         dotnet publish -c ${{ matrix.configuration }} --no-build -o ../../Artifacts/Service/lib/Default
+        mv ../../Artifacts/Service/lib/Default/appsettings.yml ../../Artifacts/Service/appsettings.yml
 
     - name: Store Server Service
       if: ${{ matrix.configuration == 'Release' && matrix.watchdog-type == 'Basic' }}
@@ -234,16 +267,15 @@ jobs:
         path: Artifacts/Service/
 
   linux-integration-tests:
-    name: Linux Integration Tests
+    name: Linux Integration Test
     needs: dmapi-build
     services: # We start all dbs here so we can just code the stuff once
       postgres:
-        image: postgres
+        image: cyberboss/postgres-max-connections # Fork of _/postgres:latest with max_connections=500 becuase GitHub actions service containers have no way to set command lines. Rebuilds with updates.
         ports:
           - 5432:5432
         env:
           POSTGRES_PASSWORD: postgres
-        # Set health checks to wait until postgres has started
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -271,11 +303,13 @@ jobs:
           --health-interval=10s
           --health-timeout=5s
           --health-retries=3
+    concurrency: integration-linux-${{ github.head_ref }}
     strategy:
+      max-parallel: 2
       matrix:
         database-type: [ 'Sqlite', 'PostgresSql', 'MariaDB', 'MySql' ]
         watchdog-type: [ 'Basic', 'System' ]
-        configuration: [ 'Debug', 'Release' ]
+        configuration: [ 'Release' ]
     runs-on: ubuntu-latest
     steps:
     - name: Disable ptrace_scope
@@ -285,7 +319,7 @@ jobs:
       run: |
         sudo dpkg --add-architecture i386
         sudo apt-get update
-        sudo apt-get install -y libc6-i386 libstdc++6:i386 gdb
+        sudo apt-get install -y -o APT::Immediate-Configure=0 libc6-i386 libstdc++6:i386 gdb
 
     - name: Install Node 12.X
       uses: actions/setup-node@v1
@@ -295,49 +329,60 @@ jobs:
     - name: Setup dotnet
       uses: actions/setup-dotnet@v1
       with:
-        dotnet-version: ${{ matrix.dotnet }}
+        dotnet-version: ${{ env.TGS4_DOTNET_VERSION }}
 
     - name: Set Sqlite Connection Info
       if: ${{ matrix.database-type == 'Sqlite' }}
       run: |
-        echo "::set-env name=TGS4_TEST_DATABASE_TYPE::Sqlite"
-        echo "::set-env name=TGS4_TEST_CONNECTION_STRING::Data Source=TGS_${{ matrix.watchdog-type }}_${{ matrix.configuration }}.sqlite3;Mode=ReadWriteCreate"
+        echo "TGS4_TEST_DATABASE_TYPE=Sqlite" >> $GITHUB_ENV
+        echo "TGS4_TEST_CONNECTION_STRING=Data Source=TGS_${{ matrix.watchdog-type }}_${{ matrix.configuration }}.sqlite3;Mode=ReadWriteCreate" >> $GITHUB_ENV
 
     - name: Set PostgresSql Connection Info
       if: ${{ matrix.database-type == 'PostgresSql' }}
       run: |
-        echo "::set-env name=TGS4_TEST_DATABASE_TYPE::PostgresSql"
-        echo "::set-env name=TGS4_TEST_CONNECTION_STRING::Application Name=tgstation-server;Host=127.0.0.1;Username=postgres;Password=postgres;Database=TGS__${{ matrix.watchdog-type }}_${{ matrix.configuration }}"
+        echo "TGS4_TEST_DATABASE_TYPE=PostgresSql" >> $GITHUB_ENV
+        echo "TGS4_TEST_CONNECTION_STRING=Application Name=tgstation-server;Host=127.0.0.1;Username=postgres;Password=postgres;Database=TGS__${{ matrix.watchdog-type }}_${{ matrix.configuration }}" >> $GITHUB_ENV
 
     - name: Set MariaDB Connection Info
       if: ${{ matrix.database-type == 'MariaDB' }}
       run: |
-        echo "::set-env name=TGS4_TEST_DATABASE_TYPE::MariaDB"
-        echo "::set-env name=TGS4_TEST_CONNECTION_STRING::Server=127.0.0.1;uid=root;pwd=mariadb;database=tgs__${{ matrix.watchdog-type }}_${{ matrix.configuration }}"
+        echo "TGS4_TEST_DATABASE_TYPE=MariaDB" >> $GITHUB_ENV
+        echo "TGS4_TEST_CONNECTION_STRING=Server=127.0.0.1;uid=root;pwd=mariadb;database=tgs__${{ matrix.watchdog-type }}_${{ matrix.configuration }}" >> $GITHUB_ENV
 
     - name: Set MySQL Connection Info
       if: ${{ matrix.database-type == 'MySql' }}
       run: |
-        echo "::set-env name=TGS4_TEST_DATABASE_TYPE::MySql"
-        echo "::set-env name=TGS4_TEST_CONNECTION_STRING::Server=127.0.0.1;Port=3307;uid=root;pwd=mysql;database=tgs__${{ matrix.watchdog-type }}_${{ matrix.configuration }}"
-        echo "::set-env name=Database__ServerVersion::5.7.31"
+        echo "TGS4_TEST_DATABASE_TYPE=MySql" >> $GITHUB_ENV
+        echo "TGS4_TEST_CONNECTION_STRING=Server=127.0.0.1;Port=3307;uid=root;pwd=mysql;database=tgs__${{ matrix.watchdog-type }}_${{ matrix.configuration }}" >> $GITHUB_ENV
+        echo "Database__ServerVersion=5.7.31" >> $GITHUB_ENV
 
     - name: Set General__UseBasicWatchdog
       if: ${{ matrix.watchdog-type == 'Basic' }}
-      run: echo "::set-env name=General__UseBasicWatchdog::true"
+      run: echo "General__UseBasicWatchdog=true" >> $GITHUB_ENV
 
     - name: Checkout
       uses: actions/checkout@v1
 
     - name: Set TGS4_TEST_PULL_REQUEST_NUMBER
       if: ${{ github.event_name == 'pull_request' }}
-      run: echo "::set-env name=TGS4_TEST_PULL_REQUEST_NUMBER::${{ github.event.number }}"
+      run: echo "TGS4_TEST_PULL_REQUEST_NUMBER=${{ github.event.number }}" >> $GITHUB_ENV
+
+    - name: Set TGS4_GITHUB_REF for PR
+      if: ${{ github.event_name == 'pull_request' }}
+      run: echo "TGS4_GITHUB_REF=${{ github.base_ref }}" >> $GITHUB_ENV
+
+    - name: Set TGS4_GITHUB_REF for push
+      if: ${{ github.event_name == 'push' }}
+      shell: bash
+      run: |
+        TEMP_GITHUB_REF="${{ github.event.ref }}"
+        echo "TGS4_GITHUB_REF=${TEMP_GITHUB_REF##*/}" >> $GITHUB_ENV
 
     - name: Run Integration Test
       run: |
         cd tests/Tgstation.Server.Tests
         sleep 10
-        dotnet test -c ${{ matrix.configuration }} -l "console;verbosity=detailed;noprogress=true" --collect:"XPlat Code Coverage" --settings ../../build/coverlet.runsettings -r ./TestResults
+        dotnet test -c ${{ matrix.configuration }}NoService -l "console;verbosity=detailed;noprogress=true" --collect:"XPlat Code Coverage" --settings ../../build/coverlet.runsettings -r ./TestResults
 
     - name: Store Code Coverage
       uses: actions/upload-artifact@v2
@@ -351,13 +396,15 @@ jobs:
         cd src/Tgstation.Server.Host.Console
         dotnet publish -c ${{ matrix.configuration }} -o ../../Artifacts/Console
         cd ../Tgstation.Server.Host
-        dotnet publish -c ${{ matrix.configuration }} --no-build -o ../../Artifacts/Console/lib/Default
+        dotnet publish -c ${{ matrix.configuration }}NoService --no-build -o ../../Artifacts/Console/lib/Default
+        mv ../../Artifacts/Console/lib/Default/appsettings.yml ../../Artifacts/Console/appsettings.yml
 
     - name: Package Server Update Package
       if: ${{ matrix.configuration == 'Release' && matrix.watchdog-type == 'System' && matrix.database-type == 'PostgresSql' }}
       run: |
         cd src/Tgstation.Server.Host
-        dotnet publish -c ${{ matrix.configuration }} --no-build -o ../../Artifacts/ServerUpdate
+        dotnet publish -c ${{ matrix.configuration }}NoService --no-build -o ../../Artifacts/ServerUpdate
+        rm ../../Artifacts/ServerUpdate/appsettings.yml
 
     - name: Store Server Console
       if: ${{ matrix.configuration == 'Release' && matrix.watchdog-type == 'System' && matrix.database-type == 'MariaDB' }}
@@ -396,7 +443,7 @@ jobs:
         path: ./swagger
 
     - name: Lint OpenAPI Spec
-      run: npx lint-openapi -p -c build/OpenApiValidationSettings.json ./swagger/swagger.json
+      run: npx lint-openapi -v -p -c build/OpenApiValidationSettings.json ./swagger/swagger.json
 
   upload-code-coverage:
     name: Upload Code Coverage
@@ -418,23 +465,11 @@ jobs:
         name: linux-unit-test-coverage-Release
         path: ./code_coverage/unit_tests/linux_unit_tests_release
 
-    - name: Retrieve Linux Integration Test Coverage (Debug, Basic, Sqlite)
-      uses: actions/download-artifact@v2
-      with:
-        name: linux-integration-test-coverage-Debug-Basic-Sqlite
-        path: ./code_coverage/integration_tests/linux_integration_tests_debug_basic_sqlite
-
     - name: Retrieve Linux Integration Test Coverage (Release, Basic, Sqlite)
       uses: actions/download-artifact@v2
       with:
         name: linux-integration-test-coverage-Release-Basic-Sqlite
         path: ./code_coverage/integration_tests/linux_integration_tests_release_basic_sqlite
-
-    - name: Retrieve Linux Integration Test Coverage (Debug, System, Sqlite)
-      uses: actions/download-artifact@v2
-      with:
-        name: linux-integration-test-coverage-Debug-System-Sqlite
-        path: ./code_coverage/integration_tests/linux_integration_tests_debug_system_sqlite
 
     - name: Retrieve Linux Integration Test Coverage (Release, System, Sqlite)
       uses: actions/download-artifact@v2
@@ -442,23 +477,11 @@ jobs:
         name: linux-integration-test-coverage-Release-System-Sqlite
         path: ./code_coverage/integration_tests/linux_integration_tests_release_system_sqlite
 
-    - name: Retrieve Linux Integration Test Coverage (Debug, Basic, PostgresSql)
-      uses: actions/download-artifact@v2
-      with:
-        name: linux-integration-test-coverage-Debug-Basic-PostgresSql
-        path: ./code_coverage/integration_tests/linux_integration_tests_debug_basic_postgressql
-
     - name: Retrieve Linux Integration Test Coverage (Release, Basic, PostgresSql)
       uses: actions/download-artifact@v2
       with:
         name: linux-integration-test-coverage-Release-Basic-PostgresSql
         path: ./code_coverage/integration_tests/linux_integration_tests_release_basic_postgressql
-
-    - name: Retrieve Linux Integration Test Coverage (Debug, System, PostgresSql)
-      uses: actions/download-artifact@v2
-      with:
-        name: linux-integration-test-coverage-Debug-System-PostgresSql
-        path: ./code_coverage/integration_tests/linux_integration_tests_debug_system_postgressql
 
     - name: Retrieve Linux Integration Test Coverage (Release, System, PostgresSql)
       uses: actions/download-artifact@v2
@@ -466,23 +489,11 @@ jobs:
         name: linux-integration-test-coverage-Release-System-PostgresSql
         path: ./code_coverage/integration_tests/linux_integration_tests_release_system_mariadb
 
-    - name: Retrieve Linux Integration Test Coverage (Debug, Basic, MariaDB)
-      uses: actions/download-artifact@v2
-      with:
-        name: linux-integration-test-coverage-Debug-Basic-MariaDB
-        path: ./code_coverage/integration_tests/linux_integration_tests_debug_basic_mariadb
-
     - name: Retrieve Linux Integration Test Coverage (Release, Basic, MariaDB)
       uses: actions/download-artifact@v2
       with:
         name: linux-integration-test-coverage-Release-Basic-MariaDB
         path: ./code_coverage/integration_tests/linux_integration_tests_release_basic_mariadb
-
-    - name: Retrieve Linux Integration Test Coverage (Debug, System, MariaDB)
-      uses: actions/download-artifact@v2
-      with:
-        name: linux-integration-test-coverage-Debug-System-MariaDB
-        path: ./code_coverage/integration_tests/linux_integration_tests_debug_system_mariadb
 
     - name: Retrieve Linux Integration Test Coverage (Release, System, MariaDB)
       uses: actions/download-artifact@v2
@@ -490,23 +501,11 @@ jobs:
         name: linux-integration-test-coverage-Release-System-MariaDB
         path: ./code_coverage/integration_tests/linux_integration_tests_release_system_mysql
 
-    - name: Retrieve Linux Integration Test Coverage (Debug, Basic, MySql)
-      uses: actions/download-artifact@v2
-      with:
-        name: linux-integration-test-coverage-Debug-Basic-MySql
-        path: ./code_coverage/integration_tests/linux_integration_tests_debug_basic_mysql
-
     - name: Retrieve Linux Integration Test Coverage (Release, Basic, MySql)
       uses: actions/download-artifact@v2
       with:
         name: linux-integration-test-coverage-Release-Basic-MySql
         path: ./code_coverage/integration_tests/linux_integration_tests_release_basic_mysql
-
-    - name: Retrieve Linux Integration Test Coverage (Debug, System, MySql)
-      uses: actions/download-artifact@v2
-      with:
-        name: linux-integration-test-coverage-Debug-System-MySql
-        path: ./code_coverage/integration_tests/linux_integration_tests_debug_system_mysql
 
     - name: Retrieve Linux Integration Test Coverage (Release, System, MySql)
       uses: actions/download-artifact@v2
@@ -568,7 +567,7 @@ jobs:
     name: Deploy HTTP API
     needs: [upload-code-coverage, validate-openapi-spec]
     runs-on: windows-latest
-    if: github.event_name == 'push' && github.event.ref == 'refs/heads/master' && contains(github.event.head_commit.message, '[APIDeploy]')
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[APIDeploy]')
     steps:
       - name: Checkout
         uses: actions/checkout@v1
@@ -578,7 +577,7 @@ jobs:
         run: |
           [XML]$versionXML = Get-Content build/Version.props
           $apiVersion = $versionXML.Project.PropertyGroup.TgsApiVersion
-          Write-Host "::set-env name=TGS_API_VERSION::$apiVersion"
+          echo "TGS_API_VERSION=$apiVersion" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Retrieve OpenAPI Spec
         uses: actions/download-artifact@v2
@@ -611,11 +610,8 @@ jobs:
     name: Deploy DreamMaker API
     needs: [upload-code-coverage, validate-openapi-spec]
     runs-on: windows-latest
-    if: github.event_name == 'push' && github.event.ref == 'refs/heads/master' && contains(github.event.head_commit.message, '[DMDeploy]')
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[DMDeploy]')
     steps:
-      - name: Install 7Zip PS Module
-        shell: powershell
-        run: Install-Module -Name 7Zip4PowerShell -Verbose -Force
 
       - name: Checkout
         uses: actions/checkout@v1
@@ -625,11 +621,12 @@ jobs:
         run: |
           [XML]$versionXML = Get-Content build/Version.props
           $dmVersion = $versionXML.Project.PropertyGroup.TgsDmapiVersion
-          Write-Host "::set-env name=TGS_DM_VERSION::$dmVersion"
+          echo "TGS_DM_VERSION=$dmVersion" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Zip DMAPI
         shell: powershell
-        run: Compress-7Zip -Path src/DMAPI/* -ArchiveFileName DMAPI.zip -Format Zip
+        run: |
+          &"C:/Program Files/7-Zip/7z.exe" a DMAPI.zip ./src/DMAPI/* -tzip
 
       - name: Create GitHub Release
         uses: juitnow/github-action-create-release@v1
@@ -656,8 +653,13 @@ jobs:
     name: Deploy Nuget Packages
     needs: [upload-code-coverage, validate-openapi-spec]
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.event.ref == 'refs/heads/master' && contains(github.event.head_commit.message, '[NugetDeploy]')
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[NugetDeploy]')
     steps:
+      - name: Setup dotnet
+        uses: actions/setup-dotnet@v1
+        with:
+          dotnet-version: ${{ env.TGS4_DOTNET_VERSION }}
+
       - name: Checkout
         uses: actions/checkout@v1
 
@@ -683,10 +685,6 @@ jobs:
     runs-on: windows-latest
     if: github.event_name == 'push' && github.event.ref == 'refs/heads/master' && contains(github.event.head_commit.message, '[TGSDeploy]')
     steps:
-      - name: Install 7Zip PS Module
-        shell: powershell
-        steps: Install-Module -Name 7Zip4PowerShell -Verbose -Force
-
       - name: Checkout
         uses: actions/checkout@v1
 
@@ -695,7 +693,7 @@ jobs:
         run: |
           [XML]$versionXML = Get-Content build/Version.props
           $tgsVersion = $versionXML.Project.PropertyGroup.TgsCoreVersion
-          Write-Host "::set-env name=TGS_VERSION::$tgsVersion"
+          echo "TGS_VERSION=$tgsVersion" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Retrieve Server Service
         uses: actions/download-artifact@v2
@@ -724,33 +722,29 @@ jobs:
       - name: Zip Artifacts
         shell: powershell
         run: |
-          Compress-7Zip -Path src/DMAPI/* -ArchiveFileName DMAPI.zip -Format Zip
-          Compress-7Zip -Path ServerService/* -ArchiveFileName ServerService.zip -Format Zip
-          Compress-7Zip -Path ServerConsole/* -ArchiveFileName ServerConsole.zip -Format Zip
-          Compress-7Zip -Path ServerUpdatePackage/* -ArchiveFileName ServerUpdatePackage.zip -Format Zip
+          &"C:/Program Files/7-Zip/7z.exe" a DMAPI.zip ./src/DMAPI/* -tzip
+          &"C:/Program Files/7-Zip/7z.exe" a ServerService.zip ./ServerService/* -tzip
+          &"C:/Program Files/7-Zip/7z.exe" a ServerConsole.zip ./ServerConsole/* -tzip
+          &"C:/Program Files/7-Zip/7z.exe" a ServerUpdatePackage.zip ./ServerUpdatePackage/* -tzip
 
       - name: Generate Release Notes
-        shell: powershell
-        run: |
-          dotnet run -c Release -p tools/ReleaseNotes ${{ env.TGS_VERSION }} build/Version.props
-          $releaseNotes = [IO.File]::ReadAllText("release_notes.md")
-          Write-Host "::set-env name=TGS_RELEASE_NOTES::$releaseNotes"
+        run: dotnet run -c Release -p tools/ReleaseNotes ${{ env.TGS_VERSION }}
 
       - name: Create GitHub Release
-        uses: juitnow/github-action-create-release@v1
+        uses: actions/create-release@v1
         id: create_release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEV_PUSH_TOKEN }}
         with:
           tag_name: tgstation-server-v${{ env.TGS_VERSION }}
           release_name: tgstation-server-v${{ env.TGS_VERSION }}
-          body: ${{ env.TGS_RELEASE_NOTES }}
+          body_path: release_notes.md
           commitish: ${{ github.event.head_commit.id }}
 
       - name: Upload Server Console Artifact
         uses: actions/upload-release-asset@v1
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEV_PUSH_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ./ServerConsole.zip
@@ -760,7 +754,7 @@ jobs:
       - name: Upload Server Service Artifact
         uses: actions/upload-release-asset@v1
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEV_PUSH_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ./ServerService.zip
@@ -770,7 +764,7 @@ jobs:
       - name: Upload DMAPI Artifact
         uses: actions/upload-release-asset@v1
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEV_PUSH_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ./DMAPI.zip
@@ -780,7 +774,7 @@ jobs:
       - name: Upload OpenApi Spec Artifact
         uses: actions/upload-release-asset@v1
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEV_PUSH_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ./swagger/swagger.json
@@ -790,9 +784,10 @@ jobs:
       - name: Upload Server Update Package Artifact
         uses: actions/upload-release-asset@v1
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEV_PUSH_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ./ServerUpdatePackage.zip
           asset_name: ServerUpdatePackage.zip
           asset_content_type: application/zip
+          

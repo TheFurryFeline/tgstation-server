@@ -1,10 +1,13 @@
+﻿using System;
+using System.Threading;
+using System.Threading.Tasks;
+
 using LibGit2Sharp;
 using LibGit2Sharp.Handlers;
 using Microsoft.Extensions.Logging;
-using System;
-using System.Threading;
-using System.Threading.Tasks;
+
 using Tgstation.Server.Api.Models;
+using Tgstation.Server.Host.IO;
 using Tgstation.Server.Host.Jobs;
 
 namespace Tgstation.Server.Host.Components.Repository
@@ -18,7 +21,7 @@ namespace Tgstation.Server.Host.Components.Repository
 		readonly ILogger<LibGit2RepositoryFactory> logger;
 
 		/// <summary>
-		/// Initializes a new instance of the <see cref="LibGit2RepositoryFactory"/> <see langword="class"/>.
+		/// Initializes a new instance of the <see cref="LibGit2RepositoryFactory"/> class.
 		/// </summary>
 		/// <param name="logger">The value of <see cref="logger"/>.</param>
 		public LibGit2RepositoryFactory(ILogger<LibGit2RepositoryFactory> logger)
@@ -27,43 +30,51 @@ namespace Tgstation.Server.Host.Components.Repository
 		}
 
 		/// <inheritdoc />
-		public LibGit2Sharp.IRepository CreateInMemory()
+		public void CreateInMemory()
 		{
 			logger.LogTrace("Creating in-memory libgit2 repository...");
-			return new LibGit2Sharp.Repository();
+			using (new LibGit2Sharp.Repository())
+				logger.LogTrace("Success");
 		}
 
 		/// <inheritdoc />
-		public Task<LibGit2Sharp.IRepository> CreateFromPath(string path, CancellationToken cancellationToken)
+		public async Task<LibGit2Sharp.IRepository> CreateFromPath(string path, CancellationToken cancellationToken)
 		{
 			if (path == null)
 				throw new ArgumentNullException(nameof(path));
 
-			return Task.Factory.StartNew<LibGit2Sharp.IRepository>(
+			var repo = await Task.Factory.StartNew<LibGit2Sharp.IRepository>(
 				() =>
 				{
 					logger.LogTrace("Creating libgit2 repostory at {0}...", path);
 					return new LibGit2Sharp.Repository(path);
 				},
 				cancellationToken,
-				TaskCreationOptions.LongRunning,
-				TaskScheduler.Current);
+				DefaultIOManager.BlockingTaskCreationOptions,
+				TaskScheduler.Current)
+				.ConfigureAwait(false);
+
+			return repo;
 		}
 
 		/// <inheritdoc />
-		public Task Clone(Uri url, CloneOptions cloneOptions, string path, CancellationToken cancellationToken) => Task.Factory.StartNew(() =>
-		{
-			try
+		public Task Clone(Uri url, CloneOptions cloneOptions, string path, CancellationToken cancellationToken) => Task.Factory.StartNew(
+			() =>
 			{
-				logger.LogTrace("Cloning {0} into {1}...", url, path);
-				LibGit2Sharp.Repository.Clone(url.ToString(), path, cloneOptions);
-			}
-			catch (UserCancelledException ex)
-			{
-				logger.LogTrace(ex, "Suppressing clone cancellation exception");
-				cancellationToken.ThrowIfCancellationRequested();
-			}
-		}, cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Current);
+				try
+				{
+					logger.LogTrace("Cloning {0} into {1}...", url, path);
+					LibGit2Sharp.Repository.Clone(url.ToString(), path, cloneOptions);
+				}
+				catch (UserCancelledException ex)
+				{
+					logger.LogTrace(ex, "Suppressing clone cancellation exception");
+					cancellationToken.ThrowIfCancellationRequested();
+				}
+			},
+			cancellationToken,
+			DefaultIOManager.BlockingTaskCreationOptions,
+			TaskScheduler.Current);
 
 		/// <inheritdoc />
 		public CredentialsHandler GenerateCredentialsHandler(string username, string password) => (a, b, supportedCredentialTypes) =>
@@ -77,7 +88,7 @@ namespace Tgstation.Server.Host.Components.Repository
 				return new UsernamePasswordCredentials
 				{
 					Username = username,
-					Password = password
+					Password = password,
 				};
 
 			if (supportsAnonymous)

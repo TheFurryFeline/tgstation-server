@@ -1,10 +1,12 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+
 using Tgstation.Server.Api.Models;
+using Tgstation.Server.Api.Models.Request;
 using Tgstation.Server.Client;
 using Tgstation.Server.Client.Components;
 
@@ -33,7 +35,7 @@ namespace Tgstation.Server.Tests.Instance
 
 		async Task RunIrc(CancellationToken cancellationToken)
 		{
-			var firstBot = new ChatBot
+			var firstBotReq = new ChatBotCreateRequest
 			{
 				ConnectionString = Environment.GetEnvironmentVariable("TGS4_TEST_IRC_CONNECTION_STRING"),
 				Enabled = false,
@@ -43,40 +45,46 @@ namespace Tgstation.Server.Tests.Instance
 				ChannelLimit = 1
 			};
 
-			var csb = new IrcConnectionStringBuilder(firstBot.ConnectionString);
+			var csb = new IrcConnectionStringBuilder(firstBotReq.ConnectionString);
 
-			Assert.IsTrue(csb.Valid, $"Invalid IRC connection string: {firstBot.ConnectionString}");
+			Assert.IsTrue(csb.Valid, $"Invalid IRC connection string: {firstBotReq.ConnectionString}");
 
-			firstBot = await chatClient.Create(firstBot, cancellationToken);
+			var firstBot = await chatClient.Create(firstBotReq, cancellationToken);
 
 			Assert.AreEqual(csb.ToString(), firstBot.ConnectionString);
 			Assert.AreNotEqual(0, firstBot.Id);
 
-			var bots = await chatClient.List(cancellationToken);
+			var bots = await chatClient.List(null, cancellationToken);
 			Assert.AreEqual(firstBot.Id, bots.First(x => x.Provider.Value == ChatProvider.Irc).Id);
 
 			var retrievedBot = await chatClient.GetId(firstBot, cancellationToken);
 			Assert.AreEqual(firstBot.Id, retrievedBot.Id);
 
-			firstBot.Enabled = true;
-			var updatedBot = await chatClient.Update(firstBot, cancellationToken);
+			var updatedBot = await chatClient.Update(new ChatBotUpdateRequest
+			{
+				Id = firstBot.Id,
+				Enabled = true
+			}, cancellationToken);
 
 			Assert.AreEqual(true, updatedBot.Enabled);
 
-			var channelId = Environment.GetEnvironmentVariable("TGS4_TEST_IRC_CHANNEL");
-			firstBot.Channels = new List<ChatChannel>
-			{
-				new ChatChannel
-				{
-					IsAdminChannel = false,
-					IsUpdatesChannel = true,
-					IsWatchdogChannel = true,
-					Tag = "butt2",
-					IrcChannel = channelId
-				}
-			};
+			var channelId = Environment.GetEnvironmentVariable("TGS4_TEST_IRC_CHANNEL"); ;
 
-			updatedBot = await chatClient.Update(firstBot, cancellationToken);
+			updatedBot = await chatClient.Update(new ChatBotUpdateRequest
+			{
+				Id = firstBot.Id,
+				Channels = new List<ChatChannel>
+				{
+					new ChatChannel
+					{
+						IsAdminChannel = false,
+						IsUpdatesChannel = true,
+						IsWatchdogChannel = true,
+						Tag = "butt2",
+						IrcChannel = channelId
+					}
+				}
+			}, cancellationToken);
 
 			Assert.AreEqual(true, updatedBot.Enabled);
 			Assert.IsNotNull(updatedBot.Channels);
@@ -91,9 +99,14 @@ namespace Tgstation.Server.Tests.Instance
 
 		async Task RunDiscord(CancellationToken cancellationToken)
 		{
-			var firstBot = new ChatBot
+			var firstBotReq = new ChatBotCreateRequest
 			{
-				ConnectionString = Environment.GetEnvironmentVariable("TGS4_TEST_DISCORD_TOKEN"),
+				ConnectionString =
+					new DiscordConnectionStringBuilder
+					{
+						BotToken = Environment.GetEnvironmentVariable("TGS4_TEST_DISCORD_TOKEN"),
+						DMOutputDisplay = DiscordDMOutputDisplayType.OnError
+					}.ToString(),
 				Enabled = false,
 				Name = "r4407",
 				Provider = ChatProvider.Discord,
@@ -101,23 +114,26 @@ namespace Tgstation.Server.Tests.Instance
 				ChannelLimit = 1
 			};
 
-			var csb = new DiscordConnectionStringBuilder(firstBot.ConnectionString);
+			var csb = new DiscordConnectionStringBuilder(firstBotReq.ConnectionString);
 
-			Assert.IsTrue(csb.Valid, $"Invalid Discord connection string: {firstBot.ConnectionString}");
+			Assert.IsTrue(csb.Valid, $"Invalid Discord connection string: {firstBotReq.ConnectionString}");
 
-			firstBot = await chatClient.Create(firstBot, cancellationToken);
+			var firstBot = await chatClient.Create(firstBotReq, cancellationToken);
 
 			Assert.AreEqual(csb.ToString(), firstBot.ConnectionString);
 			Assert.AreNotEqual(0, firstBot.Id);
 
-			var bots = await chatClient.List(cancellationToken);
+			var bots = await chatClient.List(null, cancellationToken);
 			Assert.AreEqual(firstBot.Id, bots.First(x => x.Provider.Value == ChatProvider.Discord).Id);
 
 			var retrievedBot = await chatClient.GetId(firstBot, cancellationToken);
 			Assert.AreEqual(firstBot.Id, retrievedBot.Id);
 
-			firstBot.Enabled = true;
-			var updatedBot = await chatClient.Update(firstBot, cancellationToken);
+			var updatedBot = await chatClient.Update(new ChatBotUpdateRequest
+			{
+				Id = firstBot.Id,
+				Enabled = true
+			}, cancellationToken);
 
 			Assert.AreEqual(true, updatedBot.Enabled);
 
@@ -134,7 +150,21 @@ namespace Tgstation.Server.Tests.Instance
 				}
 			};
 
-			updatedBot = await chatClient.Update(firstBot, cancellationToken);
+			updatedBot = await chatClient.Update(new ChatBotUpdateRequest
+			{
+				Id = firstBot.Id,
+				Channels = new List<ChatChannel>
+				{
+					new ChatChannel
+					{
+						IsAdminChannel = true,
+						IsUpdatesChannel = true,
+						IsWatchdogChannel = true,
+						Tag = "butt",
+						DiscordChannelId = channelId
+					}
+				}
+			}, cancellationToken);
 
 			Assert.AreEqual(true, updatedBot.Enabled);
 			Assert.IsNotNull(updatedBot.Channels);
@@ -149,57 +179,65 @@ namespace Tgstation.Server.Tests.Instance
 
 		public async Task RunPostTest(CancellationToken cancellationToken)
 		{
-			var activeBots = await chatClient.List(cancellationToken);
+			var activeBots = await chatClient.List(null, cancellationToken);
 
 			Assert.AreEqual(2, activeBots.Count);
 
 			await Task.WhenAll(activeBots.Select(bot => chatClient.Delete(bot, cancellationToken)));
 
-			var nowBots = await chatClient.List(cancellationToken);
+			var nowBots = await chatClient.List(null, cancellationToken);
 			Assert.AreEqual(0, nowBots.Count);
 		}
 
 		async Task RunLimitTests(CancellationToken cancellationToken)
 		{
-			await ApiAssert.ThrowsException<ConflictException>(() => chatClient.Create(new ChatBot
+			await ApiAssert.ThrowsException<ConflictException>(() => chatClient.Create(new ChatBotCreateRequest
 			{
 				Name = "asdf",
 				ConnectionString = "asdf",
 				Provider = ChatProvider.Irc
 			}, cancellationToken), ErrorCode.ChatBotMax);
 
-			var bots = await chatClient.List(cancellationToken);
-			var discordBot = bots.First(bot => bot.Provider.Value == ChatProvider.Discord);
+			var bots = await chatClient.List(null, cancellationToken);
+			var ogDiscordBot = bots.First(bot => bot.Provider.Value == ChatProvider.Discord); ;
+			var discordBotReq = new ChatBotUpdateRequest
+			{
+				Id = ogDiscordBot.Id,
+				Channels = ogDiscordBot.Channels.ToList(),
+				ChannelLimit = 1
+			};
 
 			// We limited chat bots and channels to 1 and 2 respectively, try violating them
-			discordBot.Channels.Add(
+			discordBotReq.Channels.Add(
 				new ChatChannel
 				{
 					IsAdminChannel = true,
 					IsUpdatesChannel = false,
 					IsWatchdogChannel = true,
 					Tag = "butt",
-					DiscordChannelId = discordBot.Channels.First().DiscordChannelId
+					DiscordChannelId = discordBotReq.Channels.First().DiscordChannelId
 				});
 
-			await ApiAssert.ThrowsException<ApiConflictException>(() => chatClient.Update(discordBot, cancellationToken), ErrorCode.ChatBotMaxChannels);
+			await ApiAssert.ThrowsException<ApiConflictException>(() => chatClient.Update(discordBotReq, cancellationToken), ErrorCode.ChatBotMaxChannels);
 
-			var oldChannels = discordBot.Channels;
-			discordBot.Channels = null;
-			discordBot.ChannelLimit = 0;
-			await ApiAssert.ThrowsException<ConflictException>(() => chatClient.Update(discordBot, cancellationToken), ErrorCode.ChatBotMaxChannels);
+			var oldChannels = discordBotReq.Channels;
+			discordBotReq.Channels = null;
+			discordBotReq.ChannelLimit = 0;
+			await ApiAssert.ThrowsException<ConflictException>(() => chatClient.Update(discordBotReq, cancellationToken), ErrorCode.ChatBotMaxChannels);
 
-			discordBot.Channels = oldChannels;
-			discordBot.ChannelLimit = null;
-			await ApiAssert.ThrowsException<ConflictException>(() => chatClient.Update(discordBot, cancellationToken), ErrorCode.ChatBotMaxChannels);
+			discordBotReq.Channels = oldChannels;
+			discordBotReq.ChannelLimit = null;
+			await ApiAssert.ThrowsException<ConflictException>(() => chatClient.Update(discordBotReq, cancellationToken), ErrorCode.ChatBotMaxChannels);
 
-			var instance = metadata.CloneMetadata();
-			instance.ChatBotLimit = 0;
-			await ApiAssert.ThrowsException<ConflictException>(() => instanceClient.Update(instance, cancellationToken), ErrorCode.ChatBotMax);
+			await ApiAssert.ThrowsException<ConflictException>(() => instanceClient.Update(new InstanceUpdateRequest
+			{
+				Id = metadata.Id,
+				ChatBotLimit = 0
+			}, cancellationToken), ErrorCode.ChatBotMax);
 
-			discordBot.ChannelLimit = 20;
-			discordBot.Channels = null;
-			await chatClient.Update(discordBot, cancellationToken);
+			discordBotReq.ChannelLimit = 20;
+			discordBotReq.Channels = null;
+			await chatClient.Update(discordBotReq, cancellationToken);
 		}
 	}
 }

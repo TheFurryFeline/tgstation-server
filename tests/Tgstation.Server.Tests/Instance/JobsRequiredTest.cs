@@ -1,10 +1,12 @@
-﻿using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+
 using Tgstation.Server.Api.Models;
+using Tgstation.Server.Api.Models.Response;
 using Tgstation.Server.Client.Components;
 
 namespace Tgstation.Server.Tests.Instance
@@ -18,7 +20,7 @@ namespace Tgstation.Server.Tests.Instance
 			this.JobsClient = jobsClient;
 		}
 
-		public async Task<Job> WaitForJob(Job originalJob, int timeout, bool expectFailure, ErrorCode? expectedCode, CancellationToken cancellationToken)
+		public async Task<JobResponse> WaitForJob(JobResponse originalJob, int timeout, bool expectFailure, ErrorCode? expectedCode, CancellationToken cancellationToken)
 		{
 			var job = originalJob;
 			do
@@ -45,7 +47,7 @@ namespace Tgstation.Server.Tests.Instance
 			return job;
 		}
 
-		protected async Task<Job> WaitForJobProgressThenCancel(Job originalJob, int timeout, CancellationToken cancellationToken)
+		protected async Task<JobResponse> WaitForJobProgressThenCancel(JobResponse originalJob, int timeout, CancellationToken cancellationToken)
 		{
 			var job = originalJob;
 			do

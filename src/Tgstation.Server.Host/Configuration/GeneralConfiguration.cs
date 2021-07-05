@@ -1,18 +1,22 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using System;
+
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
-using System;
+
 using Tgstation.Server.Api.Models.Internal;
+using Tgstation.Server.Host.Properties;
+using Tgstation.Server.Host.Setup;
 
 namespace Tgstation.Server.Host.Configuration
 {
 	/// <summary>
-	/// General configuration options
+	/// General configuration options.
 	/// </summary>
-	public sealed class GeneralConfiguration : ServerInformation
+	public sealed class GeneralConfiguration : ServerInformationBase
 	{
 		/// <summary>
-		/// The key for the <see cref="Microsoft.Extensions.Configuration.IConfigurationSection"/> the <see cref="GeneralConfiguration"/> resides in
+		/// The key for the <see cref="Microsoft.Extensions.Configuration.IConfigurationSection"/> the <see cref="GeneralConfiguration"/> resides in.
 		/// </summary>
 		public const string Section = "General";
 
@@ -22,34 +26,39 @@ namespace Tgstation.Server.Host.Configuration
 		public const ushort DefaultApiPort = 5000;
 
 		/// <summary>
-		/// The current <see cref="ConfigVersion"/>.
-		/// </summary>
-		public static readonly Version CurrentConfigVersion = new Version(2, 0, 0);
-
-		/// <summary>
-		/// The default value for <see cref="ServerInformation.MinimumPasswordLength"/>.
+		/// The default value for <see cref="ServerInformationBase.MinimumPasswordLength"/>.
 		/// </summary>
 		const uint DefaultMinimumPasswordLength = 15;
 
 		/// <summary>
-		/// The default value for <see cref="ServerInformation.InstanceLimit"/>.
+		/// The default value for <see cref="ServerInformationBase.InstanceLimit"/>.
 		/// </summary>
 		const uint DefaultInstanceLimit = 10;
 
 		/// <summary>
-		/// The default value for <see cref="ServerInformation.UserLimit"/>.
+		/// The default value for <see cref="ServerInformationBase.UserLimit"/>.
 		/// </summary>
 		const uint DefaultUserLimit = 100;
 
 		/// <summary>
-		/// The default value for <see cref="ByondTopicTimeout"/>
+		/// The default value for <see cref="ServerInformationBase.UserGroupLimit"/>.
+		/// </summary>
+		const uint DefaultUserGroupLimit = 25;
+
+		/// <summary>
+		/// The default value for <see cref="ByondTopicTimeout"/>.
 		/// </summary>
 		const uint DefaultByondTopicTimeout = 5000;
 
 		/// <summary>
-		/// The default value for <see cref="RestartTimeout"/>
+		/// The default value for <see cref="RestartTimeout"/>.
 		/// </summary>
 		const uint DefaultRestartTimeout = 60000;
+
+		/// <summary>
+		/// The current <see cref="ConfigVersion"/>.
+		/// </summary>
+		public static readonly Version CurrentConfigVersion = Version.Parse(MasterVersionsAttribute.Instance.RawConfigurationVersion);
 
 		/// <summary>
 		/// The <see cref="Version"/> the file says it is.
@@ -62,23 +71,23 @@ namespace Tgstation.Server.Host.Configuration
 		public ushort ApiPort { get; set; }
 
 		/// <summary>
-		/// A GitHub personal access token to use for bypassing rate limits on requests. Requires no scopes
+		/// A GitHub personal access token to use for bypassing rate limits on requests. Requires no scopes.
 		/// </summary>
 		public string GitHubAccessToken { get; set; }
 
 		/// <summary>
-		/// The <see cref="SetupWizardMode"/>
+		/// The <see cref="SetupWizardMode"/>.
 		/// </summary>
 		[JsonConverter(typeof(StringEnumConverter))]
 		public SetupWizardMode SetupWizardMode { get; set; }
 
 		/// <summary>
-		/// The timeout in milliseconds for sending and receiving topics to/from DreamDaemon. Note that a single topic exchange can take up to twice this value
+		/// The timeout in milliseconds for sending and receiving topics to/from DreamDaemon. Note that a single topic exchange can take up to twice this value.
 		/// </summary>
 		public uint ByondTopicTimeout { get; set; } = DefaultByondTopicTimeout;
 
 		/// <summary>
-		/// The timeout milliseconds for restarting the server
+		/// The timeout milliseconds for restarting the server.
 		/// </summary>
 		public uint RestartTimeout { get; set; } = DefaultRestartTimeout;
 
@@ -88,13 +97,19 @@ namespace Tgstation.Server.Host.Configuration
 		public bool UseBasicWatchdog { get; set; }
 
 		/// <summary>
-		/// Initializes a new instance of the <see cref="GeneralConfiguration"/> <see langword="class"/>.
+		/// If the swagger UI should be made avaiable.
+		/// </summary>
+		public bool HostApiDocumentation { get; set; }
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="GeneralConfiguration"/> class.
 		/// </summary>
 		public GeneralConfiguration()
 		{
 			MinimumPasswordLength = DefaultMinimumPasswordLength;
 			InstanceLimit = DefaultInstanceLimit;
 			UserLimit = DefaultUserLimit;
+			UserGroupLimit = DefaultUserGroupLimit;
 		}
 
 		/// <summary>

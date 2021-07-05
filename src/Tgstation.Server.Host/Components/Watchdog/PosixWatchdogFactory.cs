@@ -1,9 +1,12 @@
+﻿using System;
+
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using System;
+
 using Tgstation.Server.Api.Models.Internal;
 using Tgstation.Server.Host.Components.Chat;
 using Tgstation.Server.Host.Components.Deployment;
+using Tgstation.Server.Host.Components.Deployment.Remote;
 using Tgstation.Server.Host.Components.Events;
 using Tgstation.Server.Host.Components.Session;
 using Tgstation.Server.Host.Configuration;
@@ -19,7 +22,7 @@ namespace Tgstation.Server.Host.Components.Watchdog
 	sealed class PosixWatchdogFactory : WindowsWatchdogFactory
 	{
 		/// <summary>
-		/// Initializes a new instance of the <see cref="PosixWatchdogFactory"/> <see langword="class"/>.
+		/// Initializes a new instance of the <see cref="PosixWatchdogFactory"/> class.
 		/// </summary>
 		/// <param name="serverControl">The <see cref="IServerControl"/> for the <see cref="WatchdogFactory"/>.</param>
 		/// <param name="loggerFactory">The <see cref="ILoggerFactory"/> for the <see cref="WatchdogFactory"/>.</param>
@@ -41,7 +44,8 @@ namespace Tgstation.Server.Host.Components.Watchdog
 				asyncDelayer,
 				symlinkFactory,
 				generalConfigurationOptions)
-		{ }
+		{
+		}
 
 		/// <inheritdoc />
 		public override IWatchdog CreateWatchdog(
@@ -52,6 +56,7 @@ namespace Tgstation.Server.Host.Components.Watchdog
 			IIOManager gameIOManager,
 			IIOManager diagnosticsIOManager,
 			IEventConsumer eventConsumer,
+			IRemoteDeploymentManagerFactory remoteDeploymentManagerFactory,
 			Api.Models.Instance instance,
 			DreamDaemonSettings settings)
 			=> new PosixWatchdog(
@@ -64,6 +69,7 @@ namespace Tgstation.Server.Host.Components.Watchdog
 				AsyncDelayer,
 				diagnosticsIOManager,
 				eventConsumer,
+				remoteDeploymentManagerFactory,
 				gameIOManager,
 				SymlinkFactory,
 				LoggerFactory.CreateLogger<PosixWatchdog>(),

@@ -4,32 +4,34 @@ using System.Diagnostics;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+
 using Tgstation.Server.Host.Core;
+using Tgstation.Server.Host.Properties;
 using Tgstation.Server.Host.System;
 
 namespace Tgstation.Server.Host
 {
 	/// <summary>
-	/// Entrypoint for the <see cref="Process"/>
+	/// Entrypoint for the <see cref="Process"/>.
 	/// </summary>
 	static class Program
 	{
-#pragma warning disable SA1401 // Fields must be private
 		/// <summary>
 		/// The expected host watchdog <see cref="Version"/>.
 		/// </summary>
-		internal static readonly Version HostWatchdogVersion = new Version(1, 1, 0);
+		internal static Version HostWatchdogVersion => Version.Parse(MasterVersionsAttribute.Instance.RawHostWatchdogVersion);
 
 		/// <summary>
 		/// The <see cref="IServerFactory"/> to use.
 		/// </summary>
+#pragma warning disable SA1401 // Fields should be private
 		internal static IServerFactory ServerFactory = Application.CreateDefaultServerFactory();
-#pragma warning restore SA1401 // Fields must be private
+#pragma warning restore SA1401 // Fields should be private
 
 		/// <summary>
-		/// Entrypoint for the <see cref="Program"/>
+		/// Entrypoint for the <see cref="Program"/>.
 		/// </summary>
-		/// <param name="args">The command line arguments</param>
+		/// <param name="args">The command line arguments.</param>
 		/// <returns>The <see cref="global::System.Diagnostics.Process.ExitCode"/>.</returns>
 		public static async Task<int> Main(string[] args)
 		{
@@ -75,7 +77,10 @@ namespace Tgstation.Server.Host
 				{
 					await server.Run(cancellationToken).ConfigureAwait(false);
 				}
-				catch (OperationCanceledException) { }
+				catch (OperationCanceledException)
+				{
+				}
+
 				return server.RestartRequested ? 1 : 0;
 			}
 			catch (Exception e)

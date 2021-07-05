@@ -2,48 +2,47 @@
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+
 using Tgstation.Server.Api;
 using Tgstation.Server.Api.Models;
+using Tgstation.Server.Api.Models.Request;
+using Tgstation.Server.Api.Models.Response;
 
 namespace Tgstation.Server.Client.Components
 {
 	/// <inheritdoc />
-	sealed class ChatBotsClient : IChatBotsClient
+	sealed class ChatBotsClient : PaginatedClient, IChatBotsClient
 	{
 		/// <summary>
-		/// The <see cref="IApiClient"/> for the <see cref="ChatBotsClient"/>
-		/// </summary>
-		readonly IApiClient apiClient;
-
-		/// <summary>
-		/// The <see cref="Instance"/> for the <see cref="ChatBotsClient"/>
+		/// The <see cref="Instance"/> for the <see cref="ChatBotsClient"/>.
 		/// </summary>
 		readonly Instance instance;
 
 		/// <summary>
-		/// Construct a <see cref="ChatBotsClient"/>
+		/// Initializes a new instance of the <see cref="ChatBotsClient"/> class.
 		/// </summary>
-		/// <param name="apiClient">The value of <see cref="apiClient"/></param>
-		/// <param name="instance">The value of <see cref="instance"/></param>
+		/// <param name="apiClient">The <see cref="IApiClient"/> for the <see cref="PaginatedClient"/>.</param>
+		/// <param name="instance">The value of <see cref="instance"/>.</param>
 		public ChatBotsClient(IApiClient apiClient, Instance instance)
+			: base(apiClient)
 		{
-			this.apiClient = apiClient ?? throw new ArgumentNullException(nameof(apiClient));
 			this.instance = instance ?? throw new ArgumentNullException(nameof(instance));
 		}
 
 		/// <inheritdoc />
-		public Task<ChatBot> Create(ChatBot settings, CancellationToken cancellationToken) => apiClient.Create<ChatBot, ChatBot>(Routes.Chat, settings ?? throw new ArgumentNullException(nameof(settings)), instance.Id, cancellationToken);
+		public Task<ChatBotResponse> Create(ChatBotCreateRequest settings, CancellationToken cancellationToken) => ApiClient.Create<ChatBotCreateRequest, ChatBotResponse>(Routes.Chat, settings ?? throw new ArgumentNullException(nameof(settings)), instance.Id!.Value, cancellationToken);
 
 		/// <inheritdoc />
-		public Task Delete(ChatBot settings, CancellationToken cancellationToken) => apiClient.Delete(Routes.SetID(Routes.Chat, settings?.Id ?? throw new ArgumentNullException(nameof(settings))), instance.Id, cancellationToken);
+		public Task Delete(EntityId settingsId, CancellationToken cancellationToken) => ApiClient.Delete(Routes.SetID(Routes.Chat, settingsId?.Id ?? throw new ArgumentNullException(nameof(settingsId))), instance.Id!.Value, cancellationToken);
 
 		/// <inheritdoc />
-		public Task<IReadOnlyList<ChatBot>> List(CancellationToken cancellationToken) => apiClient.Read<IReadOnlyList<ChatBot>>(Routes.ListRoute(Routes.Chat), instance.Id, cancellationToken);
+		public Task<IReadOnlyList<ChatBotResponse>> List(PaginationSettings? paginationSettings, CancellationToken cancellationToken)
+			=> ReadPaged<ChatBotResponse>(paginationSettings, Routes.ListRoute(Routes.Chat), instance.Id!.Value, cancellationToken);
 
 		/// <inheritdoc />
-		public Task<ChatBot> Update(ChatBot settings, CancellationToken cancellationToken) => apiClient.Update<ChatBot, ChatBot>(Routes.Chat, settings ?? throw new ArgumentNullException(nameof(settings)), instance.Id, cancellationToken);
+		public Task<ChatBotResponse> Update(ChatBotUpdateRequest settings, CancellationToken cancellationToken) => ApiClient.Update<ChatBotUpdateRequest, ChatBotResponse>(Routes.Chat, settings ?? throw new ArgumentNullException(nameof(settings)), instance.Id!.Value, cancellationToken);
 
 		/// <inheritdoc />
-		public Task<ChatBot> GetId(ChatBot settings, CancellationToken cancellationToken) => apiClient.Read<ChatBot>(Routes.SetID(Routes.Chat, (settings ?? throw new ArgumentNullException(nameof(settings))).Id), instance.Id, cancellationToken);
+		public Task<ChatBotResponse> GetId(EntityId settingsId, CancellationToken cancellationToken) => ApiClient.Read<ChatBotResponse>(Routes.SetID(Routes.Chat, settingsId?.Id ?? throw new ArgumentNullException(nameof(settingsId))), instance.Id!.Value, cancellationToken);
 	}
 }

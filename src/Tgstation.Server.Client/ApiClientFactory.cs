@@ -1,4 +1,5 @@
 ﻿using System;
+
 using Tgstation.Server.Api;
 
 namespace Tgstation.Server.Client
@@ -7,6 +8,6 @@ namespace Tgstation.Server.Client
 	sealed class ApiClientFactory : IApiClientFactory
 	{
 		/// <inheritdoc />
-		public IApiClient CreateApiClient(Uri url, ApiHeaders apiHeaders, ApiHeaders? tokenRefreshHeaders) => new ApiClient(new HttpClient(), url, apiHeaders, tokenRefreshHeaders);
+		public IApiClient CreateApiClient(Uri url, ApiHeaders apiHeaders, ApiHeaders? tokenRefreshHeaders) => new ApiClient(new HttpClientImplementation(), url, apiHeaders, tokenRefreshHeaders);
 	}
 }

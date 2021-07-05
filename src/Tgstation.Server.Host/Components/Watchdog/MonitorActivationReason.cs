@@ -1,7 +1,7 @@
 ﻿namespace Tgstation.Server.Host.Components.Watchdog
 {
 	/// <summary>
-	/// Reasons for the monitor to wake up
+	/// Reasons for the monitor to wake up.
 	/// </summary>
 	enum MonitorActivationReason
 	{
@@ -29,5 +29,10 @@
 		/// A heartbeat is required.
 		/// </summary>
 		Heartbeat,
+
+		/// <summary>
+		/// Server primed.
+		/// </summary>
+		ActiveServerPrimed,
 	}
 }

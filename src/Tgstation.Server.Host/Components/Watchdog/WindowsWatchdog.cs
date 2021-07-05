@@ -1,10 +1,13 @@
-using Microsoft.Extensions.Logging;
-using System;
+﻿using System;
 using System.Threading;
 using System.Threading.Tasks;
+
+using Microsoft.Extensions.Logging;
+
 using Tgstation.Server.Api.Models.Internal;
 using Tgstation.Server.Host.Components.Chat;
 using Tgstation.Server.Host.Components.Deployment;
+using Tgstation.Server.Host.Components.Deployment.Remote;
 using Tgstation.Server.Host.Components.Events;
 using Tgstation.Server.Host.Components.Session;
 using Tgstation.Server.Host.Core;
@@ -44,7 +47,7 @@ namespace Tgstation.Server.Host.Components.Watchdog
 		IDmbProvider startupDmbProvider;
 
 		/// <summary>
-		/// Initializes a new instance of the <see cref="WindowsWatchdog"/> <see langword="class"/>.
+		/// Initializes a new instance of the <see cref="WindowsWatchdog"/> class.
 		/// </summary>
 		/// <param name="chat">The <see cref="IChatManager"/> for the <see cref="WatchdogBase"/>.</param>
 		/// <param name="sessionControllerFactory">The <see cref="ISessionControllerFactory"/> for the <see cref="WatchdogBase"/>.</param>
@@ -55,6 +58,7 @@ namespace Tgstation.Server.Host.Components.Watchdog
 		/// <param name="asyncDelayer">The <see cref="IAsyncDelayer"/> for the <see cref="WatchdogBase"/>.</param>
 		/// <param name="diagnosticsIOManager">The <see cref="IIOManager"/> for the <see cref="WatchdogBase"/>.</param>
 		/// <param name="eventConsumer">The <see cref="IEventConsumer"/> for the <see cref="WatchdogBase"/>.</param>
+		/// <param name="remoteDeploymentManagerFactory">The <see cref="IRemoteDeploymentManagerFactory"/> for the <see cref="WatchdogBase"/>.</param>
 		/// <param name="gameIOManager">The value of <see cref="GameIOManager"/>.</param>
 		/// <param name="symlinkFactory">The value of <see cref="symlinkFactory"/>.</param>
 		/// <param name="logger">The <see cref="ILogger"/> for the <see cref="WatchdogBase"/>.</param>
@@ -71,11 +75,13 @@ namespace Tgstation.Server.Host.Components.Watchdog
 			IAsyncDelayer asyncDelayer,
 			IIOManager diagnosticsIOManager,
 			IEventConsumer eventConsumer,
+			IRemoteDeploymentManagerFactory remoteDeploymentManagerFactory,
 			IIOManager gameIOManager,
 			ISymlinkFactory symlinkFactory,
 			ILogger<WindowsWatchdog> logger,
 			DreamDaemonLaunchParameters initialLaunchParameters,
-			Api.Models.Instance instance, bool autoStart)
+			Api.Models.Instance instance,
+			bool autoStart)
 			: base(
 				chat,
 				sessionControllerFactory,
@@ -86,6 +92,7 @@ namespace Tgstation.Server.Host.Components.Watchdog
 				asyncDelayer,
 				diagnosticsIOManager,
 				eventConsumer,
+				remoteDeploymentManagerFactory,
 				logger,
 				initialLaunchParameters,
 				instance,
@@ -98,7 +105,7 @@ namespace Tgstation.Server.Host.Components.Watchdog
 			}
 			catch
 			{
-				var _ = DisposeAsync();
+				_ = DisposeAsync();
 				throw;
 			}
 		}
@@ -118,14 +125,17 @@ namespace Tgstation.Server.Host.Components.Watchdog
 		}
 
 		/// <inheritdoc />
-		protected override MonitorAction HandleNormalReboot()
+		protected override async Task<MonitorAction> HandleNormalReboot(CancellationToken cancellationToken)
 		{
 			if (pendingSwappable != null)
 			{
+				var updateTask = BeforeApplyDmb(pendingSwappable.CompileJob, cancellationToken);
 				Logger.LogTrace("Replacing activeSwappable with pendingSwappable...");
 				Server.ReplaceDmbProvider(pendingSwappable);
 				ActiveSwappable = pendingSwappable;
 				pendingSwappable = null;
+
+				await updateTask.ConfigureAwait(false);
 			}
 			else
 				Logger.LogTrace("Nothing to do as pendingSwappable is null.");
@@ -205,9 +215,9 @@ namespace Tgstation.Server.Host.Components.Watchdog
 		/// <inheritdoc />
 		protected sealed override async Task<IDmbProvider> PrepServerForLaunch(IDmbProvider dmbToUse, CancellationToken cancellationToken)
 		{
-			if(ActiveSwappable != null)
+			if (ActiveSwappable != null)
 				throw new InvalidOperationException("Expected activeSwappable to be null!");
-			if(startupDmbProvider != null)
+			if (startupDmbProvider != null)
 				throw new InvalidOperationException("Expected startupDmbProvider to be null!");
 
 			Logger.LogTrace("Prep for server launch. pendingSwappable is {0}available", pendingSwappable == null ? "not " : String.Empty);
@@ -223,9 +233,10 @@ namespace Tgstation.Server.Host.Components.Watchdog
 			{
 				await InitialLink(cancellationToken).ConfigureAwait(false);
 			}
-			catch
+			catch (Exception ex)
 			{
 				// We won't worry about disposing activeSwappable here as we can't dispose dmbToUse here.
+				Logger.LogTrace(ex, "Initial link error, nulling ActiveSwappable");
 				ActiveSwappable = null;
 				throw;
 			}

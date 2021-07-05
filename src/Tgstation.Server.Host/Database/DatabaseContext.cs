@@ -1,14 +1,16 @@
-using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Infrastructure;
-using Microsoft.EntityFrameworkCore.Migrations;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
-using System;
+﻿using System;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+
 using Tgstation.Server.Host.Configuration;
 using Tgstation.Server.Host.Database.Migrations;
 using Tgstation.Server.Host.Models;
@@ -16,7 +18,7 @@ using Tgstation.Server.Host.Models;
 namespace Tgstation.Server.Host.Database
 {
 	/// <summary>
-	/// Backend abstract implementation of <see cref="IDatabaseContext"/>
+	/// Backend abstract implementation of <see cref="IDatabaseContext"/>.
 	/// </summary>
 #pragma warning disable CA1506 // TODO: Decomplexify
 	public abstract class DatabaseContext : DbContext, IDatabaseContext
@@ -62,9 +64,9 @@ namespace Tgstation.Server.Host.Database
 		public DbSet<RepositorySettings> RepositorySettings { get; set; }
 
 		/// <summary>
-		/// The <see cref="InstanceUser"/>s in the <see cref="DatabaseContext"/>.
+		/// The <see cref="InstancePermissionSet"/>s in the <see cref="DatabaseContext"/>.
 		/// </summary>
-		public DbSet<InstanceUser> InstanceUsers { get; set; }
+		public DbSet<InstancePermissionSet> InstancePermissionSets { get; set; }
 
 		/// <summary>
 		/// The <see cref="ChatChannel"/>s in the <see cref="DatabaseContext"/>.
@@ -82,19 +84,29 @@ namespace Tgstation.Server.Host.Database
 		public DbSet<ReattachInformation> ReattachInformations { get; set; }
 
 		/// <summary>
-		/// The <see cref="TestMerge"/>s in the <see cref="DatabaseContext"/>
+		/// The <see cref="TestMerge"/>s in the <see cref="DatabaseContext"/>.
 		/// </summary>
 		public DbSet<TestMerge> TestMerges { get; set; }
 
 		/// <summary>
-		/// The <see cref="RevInfoTestMerge"/>s om the <see cref="DatabaseContext"/>
+		/// The <see cref="RevInfoTestMerge"/>s in the <see cref="DatabaseContext"/>.
 		/// </summary>
 		public DbSet<RevInfoTestMerge> RevInfoTestMerges { get; set; }
 
 		/// <summary>
-		/// The <see cref="DeleteBehavior"/> for the <see cref="CompileJob"/>/<see cref="RevisionInformation"/> foreign key.
+		/// The <see cref="OAuthConnection"/>s in the <see cref="DatabaseContext"/>.
 		/// </summary>
-		protected virtual DeleteBehavior RevInfoCompileJobDeleteBehavior => DeleteBehavior.ClientNoAction;
+		public DbSet<OAuthConnection> OAuthConnections { get; set; }
+
+		/// <summary>
+		/// The <see cref="PermissionSet"/>s in the <see cref="DatabaseContext"/>.
+		/// </summary>
+		public DbSet<PermissionSet> PermissionSets { get; set; }
+
+		/// <summary>
+		/// The <see cref="UserGroup"/>s in the <see cref="DatabaseContext"/>.
+		/// </summary>
+		public DbSet<UserGroup> Groups { get; set; }
 
 		/// <inheritdoc />
 		IDatabaseCollection<User> IDatabaseContext.Users => usersCollection;
@@ -103,7 +115,7 @@ namespace Tgstation.Server.Host.Database
 		IDatabaseCollection<Instance> IDatabaseContext.Instances => instancesCollection;
 
 		/// <inheritdoc />
-		IDatabaseCollection<InstanceUser> IDatabaseContext.InstanceUsers => instanceUsersCollection;
+		IDatabaseCollection<InstancePermissionSet> IDatabaseContext.InstancePermissionSets => instancePermissionSetsCollection;
 
 		/// <inheritdoc />
 		IDatabaseCollection<Job> IDatabaseContext.Jobs => jobsCollection;
@@ -132,6 +144,20 @@ namespace Tgstation.Server.Host.Database
 		/// <inheritdoc />
 		IDatabaseCollection<ReattachInformation> IDatabaseContext.ReattachInformations => reattachInformationsCollection;
 
+		/// <inheritdoc />
+		IDatabaseCollection<OAuthConnection> IDatabaseContext.OAuthConnections => oAuthConnections;
+
+		/// <inheritdoc />
+		IDatabaseCollection<UserGroup> IDatabaseContext.Groups => groups;
+
+		/// <inheritdoc />
+		IDatabaseCollection<PermissionSet> IDatabaseContext.PermissionSets => permissionSets;
+
+		/// <summary>
+		/// The <see cref="DeleteBehavior"/> for the <see cref="CompileJob"/>/<see cref="RevisionInformation"/> foreign key.
+		/// </summary>
+		protected virtual DeleteBehavior RevInfoCompileJobDeleteBehavior => DeleteBehavior.ClientNoAction;
+
 		/// <summary>
 		/// Backing field for <see cref="IDatabaseContext.Users"/>.
 		/// </summary>
@@ -148,9 +174,9 @@ namespace Tgstation.Server.Host.Database
 		readonly IDatabaseCollection<CompileJob> compileJobsCollection;
 
 		/// <summary>
-		/// Backing field for <see cref="IDatabaseContext.InstanceUsers"/>.
+		/// Backing field for <see cref="IDatabaseContext.InstancePermissionSets"/>.
 		/// </summary>
-		readonly IDatabaseCollection<InstanceUser> instanceUsersCollection;
+		readonly IDatabaseCollection<InstancePermissionSet> instancePermissionSetsCollection;
 
 		/// <summary>
 		/// Backing field for <see cref="IDatabaseContext.Jobs"/>.
@@ -193,6 +219,21 @@ namespace Tgstation.Server.Host.Database
 		readonly IDatabaseCollection<ReattachInformation> reattachInformationsCollection;
 
 		/// <summary>
+		/// Backing field for <see cref="IDatabaseContext.OAuthConnections"/>.
+		/// </summary>
+		readonly IDatabaseCollection<OAuthConnection> oAuthConnections;
+
+		/// <summary>
+		/// Backing field for <see cref="IDatabaseContext.Groups"/>.
+		/// </summary>
+		readonly IDatabaseCollection<UserGroup> groups;
+
+		/// <summary>
+		/// Backing field for <see cref="IDatabaseContext.PermissionSets"/>.
+		/// </summary>
+		readonly IDatabaseCollection<PermissionSet> permissionSets;
+
+		/// <summary>
 		/// Gets the configure action for a given <typeparamref name="TDatabaseContext"/>.
 		/// </summary>
 		/// <typeparam name="TDatabaseContext">The <see cref="DatabaseContext"/> parent class to configure with.</typeparam>
@@ -213,14 +254,14 @@ namespace Tgstation.Server.Host.Database
 		}
 
 		/// <summary>
-		/// Construct a <see cref="DatabaseContext"/>
+		/// Initializes a new instance of the <see cref="DatabaseContext"/> class.
 		/// </summary>
 		/// <param name="dbContextOptions">The <see cref="DbContextOptions"/> for the <see cref="DatabaseContext"/>.</param>
-		public DatabaseContext(DbContextOptions dbContextOptions) : base(dbContextOptions)
+		protected DatabaseContext(DbContextOptions dbContextOptions) : base(dbContextOptions)
 		{
 			usersCollection = new DatabaseCollection<User>(Users);
 			instancesCollection = new DatabaseCollection<Instance>(Instances);
-			instanceUsersCollection = new DatabaseCollection<InstanceUser>(InstanceUsers);
+			instancePermissionSetsCollection = new DatabaseCollection<InstancePermissionSet>(InstancePermissionSets);
 			compileJobsCollection = new DatabaseCollection<CompileJob>(CompileJobs);
 			repositorySettingsCollection = new DatabaseCollection<RepositorySettings>(RepositorySettings);
 			dreamMakerSettingsCollection = new DatabaseCollection<DreamMakerSettings>(DreamMakerSettings);
@@ -230,6 +271,36 @@ namespace Tgstation.Server.Host.Database
 			revisionInformationsCollection = new DatabaseCollection<RevisionInformation>(RevisionInformations);
 			jobsCollection = new DatabaseCollection<Job>(Jobs);
 			reattachInformationsCollection = new DatabaseCollection<ReattachInformation>(ReattachInformations);
+			oAuthConnections = new DatabaseCollection<OAuthConnection>(OAuthConnections);
+			groups = new DatabaseCollection<UserGroup>(Groups);
+			permissionSets = new DatabaseCollection<PermissionSet>(PermissionSets);
+		}
+
+		/// <inheritdoc />
+		public Task Save(CancellationToken cancellationToken) => SaveChangesAsync(cancellationToken);
+
+		/// <inheritdoc />
+		public Task Drop(CancellationToken cancellationToken) => Database.EnsureDeletedAsync(cancellationToken);
+
+		/// <inheritdoc />
+		public async Task<bool> Migrate(ILogger<DatabaseContext> logger, CancellationToken cancellationToken)
+		{
+			if (logger == null)
+				throw new ArgumentNullException(nameof(logger));
+			var migrations = await Database.GetAppliedMigrationsAsync(cancellationToken).ConfigureAwait(false);
+			var wasEmpty = !migrations.Any();
+
+			if (wasEmpty || (await Database.GetPendingMigrationsAsync(cancellationToken).ConfigureAwait(false)).Any())
+			{
+				logger.LogInformation("Migrating database...");
+				await Database.MigrateAsync(cancellationToken).ConfigureAwait(false);
+			}
+			else
+				logger.LogDebug("No migrations to apply");
+
+			wasEmpty |= (await Users.AsQueryable().CountAsync(cancellationToken).ConfigureAwait(false)) == 0;
+
+			return wasEmpty;
 		}
 
 		/// <inheritdoc />
@@ -244,8 +315,20 @@ namespace Tgstation.Server.Host.Database
 			userModel.HasIndex(x => x.CanonicalName).IsUnique();
 			userModel.HasIndex(x => x.SystemIdentifier).IsUnique();
 			userModel.HasMany(x => x.TestMerges).WithOne(x => x.MergedBy).OnDelete(DeleteBehavior.Restrict);
+			userModel.HasMany(x => x.OAuthConnections).WithOne(x => x.User).OnDelete(DeleteBehavior.Cascade);
 
-			modelBuilder.Entity<InstanceUser>().HasIndex(x => new { x.UserId, x.InstanceId }).IsUnique();
+			modelBuilder.Entity<OAuthConnection>().HasIndex(x => new { x.Provider, x.ExternalUserId }).IsUnique();
+
+			var groupsModel = modelBuilder.Entity<UserGroup>();
+			groupsModel.HasIndex(x => x.Name).IsUnique();
+			groupsModel.HasMany(x => x.Users).WithOne(x => x.Group).OnDelete(DeleteBehavior.ClientSetNull);
+
+			var permissionSetModel = modelBuilder.Entity<PermissionSet>();
+			permissionSetModel.HasOne(x => x.Group).WithOne(x => x.PermissionSet).OnDelete(DeleteBehavior.Cascade);
+			permissionSetModel.HasOne(x => x.User).WithOne(x => x.PermissionSet).OnDelete(DeleteBehavior.Cascade);
+			permissionSetModel.HasMany(x => x.InstancePermissionSets).WithOne(x => x.PermissionSet).OnDelete(DeleteBehavior.Cascade);
+
+			modelBuilder.Entity<InstancePermissionSet>().HasIndex(x => new { x.PermissionSetId, x.InstanceId }).IsUnique();
 
 			var revInfo = modelBuilder.Entity<RevisionInformation>();
 			revInfo.HasMany(x => x.ActiveTestMerges).WithOne(x => x.RevisionInformation).OnDelete(DeleteBehavior.Cascade);
@@ -278,85 +361,122 @@ namespace Tgstation.Server.Host.Database
 			modelBuilder.Entity<ChatBot>().HasIndex(x => new { x.InstanceId, x.Name }).IsUnique();
 
 			var instanceModel = modelBuilder.Entity<Instance>();
-			instanceModel.HasIndex(x => x.Path).IsUnique();
+			instanceModel.HasIndex(x => new { x.Path, x.SwarmIdentifer }).IsUnique();
 			instanceModel.HasMany(x => x.ChatSettings).WithOne(x => x.Instance).OnDelete(DeleteBehavior.Cascade);
 			instanceModel.HasOne(x => x.DreamDaemonSettings).WithOne(x => x.Instance).OnDelete(DeleteBehavior.Cascade);
 			instanceModel.HasOne(x => x.DreamMakerSettings).WithOne(x => x.Instance).OnDelete(DeleteBehavior.Cascade);
 			instanceModel.HasOne(x => x.RepositorySettings).WithOne(x => x.Instance).OnDelete(DeleteBehavior.Cascade);
 			instanceModel.HasMany(x => x.RevisionInformations).WithOne(x => x.Instance).OnDelete(DeleteBehavior.Cascade);
-			instanceModel.HasMany(x => x.InstanceUsers).WithOne(x => x.Instance).OnDelete(DeleteBehavior.Cascade);
+			instanceModel.HasMany(x => x.InstancePermissionSets).WithOne(x => x.Instance).OnDelete(DeleteBehavior.Cascade);
 			instanceModel.HasMany(x => x.Jobs).WithOne(x => x.Instance).OnDelete(DeleteBehavior.Cascade);
 		}
 
-		/// <inheritdoc />
-		public Task Save(CancellationToken cancellationToken) => SaveChangesAsync(cancellationToken);
+		// HEY YOU
+		// IF YOU HAVE A TEST THAT'S CREATING ERRORS BECAUSE THESE VALUES AREN'T SET CORRECTLY THERE'S MORE TO FIXING IT THAN JUST UPDATING THEM
+		// IN THE FUNCTION BELOW YOU ALSO NEED TO CORRECTLY SET THE RIGHT MIGRATION TO DOWNLOAD TO FOR THE LAST TGS VERSION
+		// IF THIS BREAKS AGAIN I WILL PERSONALLY HAUNT YOUR ASS WHEN I DIE
+
+		/// <summary>
+		/// Used by unit tests to remind us to setup the correct MSSQL migration downgrades.
+		/// </summary>
+		internal static readonly Type MSLatestMigration = typeof(MSTruncateInstanceNames);
+
+		/// <summary>
+		/// Used by unit tests to remind us to setup the correct MYSQL migration downgrades.
+		/// </summary>
+		internal static readonly Type MYLatestMigration = typeof(MYTruncateInstanceNames);
+
+		/// <summary>
+		/// Used by unit tests to remind us to setup the correct PostgresSQL migration downgrades.
+		/// </summary>
+		internal static readonly Type PGLatestMigration = typeof(PGTruncateInstanceNames);
+
+		/// <summary>
+		/// Used by unit tests to remind us to setup the correct SQLite migration downgrades.
+		/// </summary>
+		internal static readonly Type SLLatestMigration = typeof(SLAddRevInfoTimestamp);
 
 		/// <inheritdoc />
-		public Task Drop(CancellationToken cancellationToken) => Database.EnsureDeletedAsync(cancellationToken);
-
-		/// <inheritdoc />
-		public async Task<bool> Migrate(ILogger<DatabaseContext> logger, CancellationToken cancellationToken)
-		{
-			if (logger == null)
-				throw new ArgumentNullException(nameof(logger));
-			var migrations = await Database.GetAppliedMigrationsAsync(cancellationToken).ConfigureAwait(false);
-			var wasEmpty = !migrations.Any();
-
-			if (wasEmpty || (await Database.GetPendingMigrationsAsync(cancellationToken).ConfigureAwait(false)).Any())
-			{
-				logger.LogInformation("Migrating database...");
-				await Database.MigrateAsync(cancellationToken).ConfigureAwait(false);
-			}
-			else
-				logger.LogDebug("No migrations to apply");
-
-			wasEmpty |= (await Users.AsQueryable().CountAsync(cancellationToken).ConfigureAwait(false)) == 0;
-
-			return wasEmpty;
-		}
-
-		/// <inheritdoc />
+#pragma warning disable CA1502 // Cyclomatic complexity
 		public async Task SchemaDowngradeForServerVersion(
 			ILogger<DatabaseContext> logger,
-			Version version,
+			Version targetVersion,
 			DatabaseType currentDatabaseType,
 			CancellationToken cancellationToken)
 		{
-			if(logger == null)
+			if (logger == null)
 				throw new ArgumentNullException(nameof(logger));
-			if (version == null)
-				throw new ArgumentNullException(nameof(version));
-			if (version < new Version(4, 0))
-				throw new ArgumentOutOfRangeException(nameof(version), version, "Not a valid V4 version!");
+			if (targetVersion == null)
+				throw new ArgumentNullException(nameof(targetVersion));
+			if (targetVersion < new Version(4, 0))
+				throw new ArgumentOutOfRangeException(nameof(targetVersion), targetVersion, "Not a valid V4 version!");
+
+			if (currentDatabaseType == DatabaseType.PostgresSql && targetVersion < new Version(4, 3, 0))
+				throw new NotSupportedException("Cannot migrate below version 4.3.0 with PostgresSql!");
+
+			if (currentDatabaseType == DatabaseType.MariaDB)
+				currentDatabaseType = DatabaseType.MySql; // Keeping switch expressions while avoiding `or` syntax from C#9
+
+			if (targetVersion < new Version(4, 1, 0))
+				throw new NotSupportedException("Cannot migrate below version 4.1.0!");
 
 			// Update this with new migrations as they are made
 			string targetMigration = null;
-
-			if (currentDatabaseType == DatabaseType.PostgresSql && version < new Version(4, 3, 0))
-				throw new NotSupportedException("Cannot migrate below version 4.3.0 with PostgresSql!");
-
-			if (version < new Version(4, 1, 0))
-				throw new NotSupportedException("Cannot migrate below version 4.1.0!");
-
-			if(version < new Version(4, 4, 0))
-				switch (currentDatabaseType)
+			if (targetVersion < new Version(4, 10, 0))
+				targetMigration = currentDatabaseType switch
 				{
-					case DatabaseType.MariaDB:
-					case DatabaseType.MySql:
-						targetMigration = nameof(MYFixForeignKey);
-						break;
-					case DatabaseType.PostgresSql:
-						targetMigration = nameof(PGCreate);
-						break;
-					case DatabaseType.SqlServer:
-					case DatabaseType.Sqlite:
-						targetMigration = nameof(MSRemoveSoftColumns);
-						break;
-					default:
-						throw new ArgumentException($"Invalid DatabaseType: {currentDatabaseType}", nameof(currentDatabaseType));
-				}
-
-			if (version < new Version(4, 2, 0))
+					DatabaseType.MySql => nameof(MSAddRevInfoTimestamp),
+					DatabaseType.PostgresSql => nameof(PGAddRevInfoTimestamp),
+					DatabaseType.SqlServer => nameof(MSAddRevInfoTimestamp),
+					DatabaseType.Sqlite => nameof(SLAddRevInfoTimestamp),
+					_ => throw new ArgumentException($"Invalid DatabaseType: {currentDatabaseType}", nameof(currentDatabaseType)),
+				};
+			if (targetVersion < new Version(4, 8, 0))
+				targetMigration = currentDatabaseType switch
+				{
+					DatabaseType.MySql => nameof(MYAddSwarmIdentifer),
+					DatabaseType.PostgresSql => nameof(PGAddSwarmIdentifer),
+					DatabaseType.SqlServer => nameof(MSAddSwarmIdentifer),
+					DatabaseType.Sqlite => nameof(SLAddSwarmIdentifer),
+					_ => throw new ArgumentException($"Invalid DatabaseType: {currentDatabaseType}", nameof(currentDatabaseType)),
+				};
+			if (targetVersion < new Version(4, 7, 0))
+				targetMigration = currentDatabaseType switch
+				{
+					DatabaseType.MySql => nameof(MYAddAdditionalDDParameters),
+					DatabaseType.PostgresSql => nameof(PGAddAdditionalDDParameters),
+					DatabaseType.SqlServer => nameof(MSAddAdditionalDDParameters),
+					DatabaseType.Sqlite => nameof(SLAddAdditionalDDParameters),
+					_ => throw new ArgumentException($"Invalid DatabaseType: {currentDatabaseType}", nameof(currentDatabaseType)),
+				};
+			if (targetVersion < new Version(4, 6, 0))
+				targetMigration = currentDatabaseType switch
+				{
+					DatabaseType.MySql => nameof(MYAddDeploymentColumns),
+					DatabaseType.PostgresSql => nameof(PGAddDeploymentColumns),
+					DatabaseType.SqlServer => nameof(MSAddDeploymentColumns),
+					DatabaseType.Sqlite => nameof(SLAddDeploymentColumns),
+					_ => throw new ArgumentException($"Invalid DatabaseType: {currentDatabaseType}", nameof(currentDatabaseType)),
+				};
+			if (targetVersion < new Version(4, 5, 0))
+				targetMigration = currentDatabaseType switch
+				{
+					DatabaseType.MySql => nameof(MYAllowNullDMApi),
+					DatabaseType.PostgresSql => nameof(PGAllowNullDMApi),
+					DatabaseType.SqlServer => nameof(MSAllowNullDMApi),
+					DatabaseType.Sqlite => nameof(SLAllowNullDMApi),
+					_ => throw new ArgumentException($"Invalid DatabaseType: {currentDatabaseType}", nameof(currentDatabaseType)),
+				};
+			if (targetVersion < new Version(4, 4, 0))
+				targetMigration = currentDatabaseType switch
+				{
+					DatabaseType.MySql => nameof(MYFixForeignKey),
+					DatabaseType.PostgresSql => nameof(PGCreate),
+					DatabaseType.SqlServer => nameof(MSRemoveSoftColumns),
+					DatabaseType.Sqlite => nameof(SLRemoveSoftColumns),
+					_ => throw new ArgumentException($"Invalid DatabaseType: {currentDatabaseType}", nameof(currentDatabaseType)),
+				};
+			if (targetVersion < new Version(4, 2, 0))
 				targetMigration = currentDatabaseType == DatabaseType.Sqlite ? nameof(SLRebuild) : nameof(MSFixCascadingDelete);
 
 			if (targetMigration == null)
@@ -365,35 +485,24 @@ namespace Tgstation.Server.Host.Database
 				return;
 			}
 
-			string migrationSubstitution;
-			switch (currentDatabaseType)
+			// already setup
+			var migrationSubstitution = currentDatabaseType switch
 			{
-				case DatabaseType.SqlServer:
-					// already setup
-					migrationSubstitution = null;
-					break;
-				case DatabaseType.MySql:
-				case DatabaseType.MariaDB:
-					migrationSubstitution = "MY{0}";
-					break;
-				case DatabaseType.Sqlite:
-					migrationSubstitution = "SL{0}";
-					break;
-				case DatabaseType.PostgresSql:
-					migrationSubstitution = "PG{0}";
-					break;
-				default:
-					throw new InvalidOperationException($"Invalid DatabaseType: {currentDatabaseType}");
-			}
+				DatabaseType.SqlServer => null, // already setup
+				DatabaseType.MySql => "MY{0}",
+				DatabaseType.Sqlite => "SL{0}",
+				DatabaseType.PostgresSql => "PG{0}",
+				_ => throw new InvalidOperationException($"Invalid DatabaseType: {currentDatabaseType}"),
+			};
 
 			if (migrationSubstitution != null)
-				targetMigration = String.Format(CultureInfo.InvariantCulture, migrationSubstitution, targetMigration.Substring(2));
+				targetMigration = String.Format(CultureInfo.InvariantCulture, migrationSubstitution, targetMigration[2..]);
 
 			// even though it clearly implements it in the DatabaseFacade definition this won't work without casting (╯ಠ益ಠ)╯︵ ┻━┻
 			var dbServiceProvider = ((IInfrastructure<IServiceProvider>)Database).Instance;
 			var migrator = dbServiceProvider.GetRequiredService<IMigrator>();
 
-			logger.LogInformation("Migrating down to version {0}. Target: {1}", version, targetMigration);
+			logger.LogInformation("Migrating down to version {0}. Target: {1}", targetVersion, targetMigration);
 			try
 			{
 				await migrator.MigrateAsync(targetMigration, cancellationToken).ConfigureAwait(false);
@@ -403,5 +512,6 @@ namespace Tgstation.Server.Host.Database
 				logger.LogCritical(e, "Failed to migrate!");
 			}
 		}
+#pragma warning restore CA1502 // Cyclomatic complexity
 	}
 }

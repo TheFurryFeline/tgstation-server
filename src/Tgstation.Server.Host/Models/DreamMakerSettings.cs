@@ -1,36 +1,35 @@
 ﻿using System.ComponentModel.DataAnnotations;
 
+using Tgstation.Server.Api.Models.Response;
+
 namespace Tgstation.Server.Host.Models
 {
 	/// <inheritdoc />
-	public sealed class DreamMakerSettings : Api.Models.DreamMaker
+	public sealed class DreamMakerSettings : Api.Models.Internal.DreamMakerSettings, IApiTransformable<DreamMakerResponse>
 	{
 		/// <summary>
-		/// The row Id
+		/// The row Id.
 		/// </summary>
 		public long Id { get; set; }
 
 		/// <summary>
-		/// The instance <see cref="Api.Models.EntityId.Id"/>
+		/// The instance <see cref="Api.Models.EntityId.Id"/>.
 		/// </summary>
 		public long InstanceId { get; set; }
 
 		/// <summary>
-		/// The parent <see cref="Models.Instance"/>
+		/// The parent <see cref="Models.Instance"/>.
 		/// </summary>
 		[Required]
 		public Instance Instance { get; set; }
 
-		/// <summary>
-		/// Convert the <see cref="DreamDaemonSettings"/> to it's API form
-		/// </summary>
-		/// <returns>A new <see cref="Api.Models.DreamMaker"/></returns>
-		public Api.Models.DreamMaker ToApi() => new Api.Models.DreamMaker
+		/// <inheritdoc />
+		public DreamMakerResponse ToApi() => new DreamMakerResponse
 		{
 			ProjectName = ProjectName,
 			ApiValidationPort = ApiValidationPort,
 			ApiValidationSecurityLevel = ApiValidationSecurityLevel,
-			RequireDMApiValidation = RequireDMApiValidation
+			RequireDMApiValidation = RequireDMApiValidation,
 		};
 	}
 }

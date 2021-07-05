@@ -1,8 +1,4 @@
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -10,11 +6,20 @@ using System.Linq.Expressions;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
 using Tgstation.Server.Api;
 using Tgstation.Server.Api.Models;
+using Tgstation.Server.Api.Models.Request;
+using Tgstation.Server.Api.Models.Response;
 using Tgstation.Server.Api.Rights;
 using Tgstation.Server.Host.Components;
 using Tgstation.Server.Host.Configuration;
+using Tgstation.Server.Host.Core;
 using Tgstation.Server.Host.Database;
 using Tgstation.Server.Host.IO;
 using Tgstation.Server.Host.Jobs;
@@ -25,10 +30,10 @@ using Tgstation.Server.Host.System;
 namespace Tgstation.Server.Host.Controllers
 {
 	/// <summary>
-	/// <see cref="ApiController"/> for managing <see cref="Components.Instance"/>s
+	/// <see cref="ApiController"/> for managing <see cref="Components.Instance"/>s.
 	/// </summary>
 	[Route(Routes.InstanceManager)]
-	#pragma warning disable CA1506 // TODO: Decomplexify
+#pragma warning disable CA1506 // TODO: Decomplexify
 	public sealed class InstanceController : ApiController
 	{
 		/// <summary>
@@ -37,29 +42,34 @@ namespace Tgstation.Server.Host.Controllers
 		public const string InstanceAttachFileName = "TGS4_ALLOW_INSTANCE_ATTACH";
 
 		/// <summary>
-		/// Prefix for move <see cref="Api.Models.Job"/>s.
+		/// Prefix for move <see cref="JobResponse"/>s.
 		/// </summary>
 		const string MoveInstanceJobPrefix = "Move instance ID ";
 
 		/// <summary>
-		/// The <see cref="IJobManager"/> for the <see cref="InstanceController"/>
+		/// The <see cref="IJobManager"/> for the <see cref="InstanceController"/>.
 		/// </summary>
 		readonly IJobManager jobManager;
 
 		/// <summary>
-		/// The <see cref="IInstanceManager"/> for the <see cref="InstanceController"/>
+		/// The <see cref="IInstanceManager"/> for the <see cref="InstanceController"/>.
 		/// </summary>
 		readonly IInstanceManager instanceManager;
 
 		/// <summary>
-		/// The <see cref="IIOManager"/> for the <see cref="InstanceController"/>
+		/// The <see cref="IIOManager"/> for the <see cref="InstanceController"/>.
 		/// </summary>
 		readonly IIOManager ioManager;
 
 		/// <summary>
-		/// The <see cref="IPlatformIdentifier"/> for the <see cref="InstanceController"/>
+		/// The <see cref="IPlatformIdentifier"/> for the <see cref="InstanceController"/>.
 		/// </summary>
 		readonly IPlatformIdentifier platformIdentifier;
+
+		/// <summary>
+		/// The <see cref="IPortAllocator"/> for the <see cref="InstanceController"/>.
+		/// </summary>
+		readonly IPortAllocator portAllocator;
 
 		/// <summary>
 		/// The <see cref="GeneralConfiguration"/> for the <see cref="InstanceController"/>.
@@ -67,127 +77,68 @@ namespace Tgstation.Server.Host.Controllers
 		readonly GeneralConfiguration generalConfiguration;
 
 		/// <summary>
-		/// Construct a <see cref="InstanceController"/>
+		/// The <see cref="SwarmConfiguration"/> for the <see cref="InstanceController"/>.
 		/// </summary>
-		/// <param name="databaseContext">The <see cref="IDatabaseContext"/> for the <see cref="ApiController"/></param>
-		/// <param name="authenticationContextFactory">The <see cref="IAuthenticationContextFactory"/> for the <see cref="ApiController"/></param>
-		/// <param name="jobManager">The value of <see cref="jobManager"/></param>
-		/// <param name="instanceManager">The value of <see cref="instanceManager"/></param>
-		/// <param name="ioManager">The value of <see cref="ioManager"/></param>
-		/// <param name="platformIdentifier">The value of <see cref="platformIdentifier"/></param>
+		readonly SwarmConfiguration swarmConfiguration;
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="InstanceController"/> class.
+		/// </summary>
+		/// <param name="databaseContext">The <see cref="IDatabaseContext"/> for the <see cref="ApiController"/>.</param>
+		/// <param name="authenticationContextFactory">The <see cref="IAuthenticationContextFactory"/> for the <see cref="ApiController"/>.</param>
+		/// <param name="jobManager">The value of <see cref="jobManager"/>.</param>
+		/// <param name="instanceManager">The value of <see cref="instanceManager"/>.</param>
+		/// <param name="ioManager">The value of <see cref="ioManager"/>.</param>
+		/// <param name="platformIdentifier">The value of <see cref="platformIdentifier"/>.</param>
+		/// <param name="portAllocator">The value of <see cref="IPortAllocator"/>.</param>
 		/// <param name="generalConfigurationOptions">The <see cref="IOptions{TOptions}"/> containing the value of <see cref="generalConfiguration"/>.</param>
-		/// <param name="logger">The <see cref="ILogger"/> for the <see cref="ApiController"/></param>
+		/// <param name="swarmConfigurationOptions">The <see cref="IOptions{TOptions}"/> containing the value of <see cref="swarmConfiguration"/>.</param>
+		/// <param name="logger">The <see cref="ILogger"/> for the <see cref="ApiController"/>.</param>
 		public InstanceController(
 			IDatabaseContext databaseContext,
 			IAuthenticationContextFactory authenticationContextFactory,
 			IJobManager jobManager,
 			IInstanceManager instanceManager,
 			IIOManager ioManager,
+			IPortAllocator portAllocator,
 			IPlatformIdentifier platformIdentifier,
 			IOptions<GeneralConfiguration> generalConfigurationOptions,
+			IOptions<SwarmConfiguration> swarmConfigurationOptions,
 			ILogger<InstanceController> logger)
 			: base(
 				  databaseContext,
 				  authenticationContextFactory,
 				  logger,
-				  false)
+				  true)
 		{
 			this.jobManager = jobManager ?? throw new ArgumentNullException(nameof(jobManager));
 			this.instanceManager = instanceManager ?? throw new ArgumentNullException(nameof(instanceManager));
 			this.ioManager = ioManager ?? throw new ArgumentNullException(nameof(ioManager));
 			this.platformIdentifier = platformIdentifier ?? throw new ArgumentNullException(nameof(platformIdentifier));
+			this.portAllocator = portAllocator ?? throw new ArgumentNullException(nameof(portAllocator));
 			generalConfiguration = generalConfigurationOptions?.Value ?? throw new ArgumentNullException(nameof(generalConfigurationOptions));
-		}
-
-		Models.Instance CreateDefaultInstance(Api.Models.Instance initialSettings)
-			=> new Models.Instance
-			{
-				ConfigurationType = initialSettings.ConfigurationType ?? ConfigurationType.Disallowed,
-				DreamDaemonSettings = new DreamDaemonSettings
-				{
-					AllowWebClient = false,
-					AutoStart = false,
-					Port = 1337,
-					SecurityLevel = DreamDaemonSecurity.Safe,
-					StartupTimeout = 60,
-					HeartbeatSeconds = 60,
-					TopicRequestTimeout = generalConfiguration.ByondTopicTimeout
-				},
-				DreamMakerSettings = new DreamMakerSettings
-				{
-					ApiValidationPort = 1339,
-					ApiValidationSecurityLevel = DreamDaemonSecurity.Safe,
-					RequireDMApiValidation = true
-				},
-				Name = initialSettings.Name,
-				Online = false,
-				Path = initialSettings.Path,
-				AutoUpdateInterval = initialSettings.AutoUpdateInterval ?? 0,
-				ChatBotLimit = initialSettings.ChatBotLimit ?? Models.Instance.DefaultChatBotLimit,
-				RepositorySettings = new RepositorySettings
-				{
-					CommitterEmail = Components.Repository.Repository.DefaultCommitterEmail,
-					CommitterName = Components.Repository.Repository.DefaultCommitterName,
-					PushTestMergeCommits = false,
-					ShowTestMergeCommitters = false,
-					AutoUpdatesKeepTestMerges = false,
-					AutoUpdatesSynchronize = false,
-					PostTestMergeComment = false
-				},
-				InstanceUsers = new List<Models.InstanceUser> // give this user full privileges on the instance
-				{
-					InstanceAdminUser(null)
-				}
-			};
-
-		string NormalizePath(string path)
-		{
-			if (path == null)
-				return null;
-
-			path = ioManager.ResolvePath(path);
-			if (platformIdentifier.IsWindows)
-				path = path.ToUpperInvariant().Replace('\\', '/');
-
-			return path;
-		}
-
-		Models.InstanceUser InstanceAdminUser(Models.InstanceUser userToModify)
-		{
-			if (userToModify == null)
-				userToModify = new Models.InstanceUser()
-				{
-					UserId = AuthenticationContext.User.Id.Value
-				};
-			userToModify.ByondRights = RightsHelper.AllRights<ByondRights>();
-			userToModify.ChatBotRights = RightsHelper.AllRights<ChatBotRights>();
-			userToModify.ConfigurationRights = RightsHelper.AllRights<ConfigurationRights>();
-			userToModify.DreamDaemonRights = RightsHelper.AllRights<DreamDaemonRights>();
-			userToModify.DreamMakerRights = RightsHelper.AllRights<DreamMakerRights>();
-			userToModify.RepositoryRights = RightsHelper.AllRights<RepositoryRights>();
-			userToModify.InstanceUserRights = RightsHelper.AllRights<InstanceUserRights>();
-			return userToModify;
+			swarmConfiguration = swarmConfigurationOptions?.Value ?? throw new ArgumentNullException(nameof(swarmConfigurationOptions));
 		}
 
 		/// <summary>
 		/// Create or attach an <see cref="Api.Models.Instance"/>.
 		/// </summary>
-		/// <param name="model">The <see cref="Api.Models.Instance"/> settings.</param>
+		/// <param name="model">The <see cref="InstanceCreateRequest"/>.</param>
 		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
 		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> of the request.</returns>
 		/// <response code="200">Instance attached successfully.</response>
 		/// <response code="201">Instance created successfully.</response>
 		[HttpPut]
 		[TgsAuthorize(InstanceManagerRights.Create)]
-		[ProducesResponseType(typeof(Api.Models.Instance), 200)]
-		[ProducesResponseType(typeof(Api.Models.Instance), 201)]
-		public async Task<IActionResult> Create([FromBody] Api.Models.Instance model, CancellationToken cancellationToken)
+		[ProducesResponseType(typeof(InstanceResponse), 200)]
+		[ProducesResponseType(typeof(InstanceResponse), 201)]
+		public async Task<IActionResult> Create([FromBody] InstanceCreateRequest model, CancellationToken cancellationToken)
 		{
 			if (model == null)
 				throw new ArgumentNullException(nameof(model));
 
 			if (String.IsNullOrWhiteSpace(model.Name))
-				return BadRequest(new ErrorMessage(ErrorCode.InstanceWhitespaceName));
+				return BadRequest(new ErrorMessageResponse(ErrorCode.InstanceWhitespaceName));
 
 			var unNormalizedPath = model.Path;
 			var targetInstancePath = NormalizePath(unNormalizedPath);
@@ -208,7 +159,7 @@ namespace Tgstation.Server.Host.Controllers
 			}
 
 			if (InstanceIsChildOf(installationDirectoryPath))
-				return Conflict(new ErrorMessage(ErrorCode.InstanceAtConflictingPath));
+				return Conflict(new ErrorMessageResponse(ErrorCode.InstanceAtConflictingPath));
 
 			// Validate it's not a child of any other instance
 			IActionResult earlyOut = null;
@@ -221,17 +172,18 @@ namespace Tgstation.Server.Host.Controllers
 					await DatabaseContext
 						.Instances
 						.AsQueryable()
+						.Where(x => x.SwarmIdentifer == swarmConfiguration.Identifier)
 						.Select(x => new Models.Instance
 						{
-							Path = x.Path
+							Path = x.Path,
 						})
 						.ForEachAsync(
 							otherInstance =>
 							{
 								if (++countOfOtherInstances >= generalConfiguration.InstanceLimit)
-									earlyOut ??= Conflict(new ErrorMessage(ErrorCode.InstanceLimitReached));
+									earlyOut ??= Conflict(new ErrorMessageResponse(ErrorCode.InstanceLimitReached));
 								else if (InstanceIsChildOf(otherInstance.Path))
-									earlyOut ??= Conflict(new ErrorMessage(ErrorCode.InstanceAtConflictingPath));
+									earlyOut ??= Conflict(new ErrorMessageResponse(ErrorCode.InstanceAtConflictingPath));
 
 								if (earlyOut != null && !newCancellationToken.IsCancellationRequested)
 									cts.Cancel();
@@ -252,7 +204,7 @@ namespace Tgstation.Server.Host.Controllers
 			if (!(generalConfiguration.ValidInstancePaths?
 				.Select(path => NormalizePath(path))
 				.Any(path => InstanceIsChildOf(path)) ?? true))
-				return BadRequest(new ErrorMessage(ErrorCode.InstanceNotAtWhitelistedPath));
+				return BadRequest(new ErrorMessageResponse(ErrorCode.InstanceNotAtWhitelistedPath));
 
 			async Task<bool> DirExistsAndIsNotEmpty()
 			{
@@ -272,11 +224,13 @@ namespace Tgstation.Server.Host.Controllers
 			bool attached = false;
 			if (await ioManager.FileExists(model.Path, cancellationToken).ConfigureAwait(false) || await dirExistsTask.ConfigureAwait(false))
 				if (!await ioManager.FileExists(ioManager.ConcatPath(model.Path, InstanceAttachFileName), cancellationToken).ConfigureAwait(false))
-					return Conflict(new ErrorMessage(ErrorCode.InstanceAtExistingPath));
+					return Conflict(new ErrorMessageResponse(ErrorCode.InstanceAtExistingPath));
 				else
 					attached = true;
 
-			var newInstance = CreateDefaultInstance(model);
+			var newInstance = await CreateDefaultInstance(model, cancellationToken).ConfigureAwait(false);
+			if (newInstance == null)
+				return Conflict(new ErrorMessageResponse(ErrorCode.NoPortsAvailable));
 
 			DatabaseContext.Instances.Add(newInstance);
 			try
@@ -301,9 +255,9 @@ namespace Tgstation.Server.Host.Controllers
 			}
 			catch (IOException e)
 			{
-				return Conflict(new ErrorMessage(ErrorCode.IOError)
+				return Conflict(new ErrorMessageResponse(ErrorCode.IOError)
 				{
-					AdditionalData = e.Message
+					AdditionalData = e.Message,
 				});
 			}
 
@@ -324,18 +278,18 @@ namespace Tgstation.Server.Host.Controllers
 		[HttpDelete("{id}")]
 		[TgsAuthorize(InstanceManagerRights.Delete)]
 		[ProducesResponseType(204)]
-		[ProducesResponseType(typeof(ErrorMessage), 410)]
+		[ProducesResponseType(typeof(ErrorMessageResponse), 410)]
 		public async Task<IActionResult> Delete(long id, CancellationToken cancellationToken)
 		{
 			var originalModel = await DatabaseContext
 				.Instances
 				.AsQueryable()
-				.Where(x => x.Id == id)
+				.Where(x => x.Id == id && x.SwarmIdentifer == swarmConfiguration.Identifier)
 				.FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
 			if (originalModel == default)
 				return Gone();
 			if (originalModel.Online.Value)
-				return Conflict(new ErrorMessage(ErrorCode.InstanceDetachOnline));
+				return Conflict(new ErrorMessageResponse(ErrorCode.InstanceDetachOnline));
 
 			DatabaseContext.Instances.Remove(originalModel);
 
@@ -366,11 +320,11 @@ namespace Tgstation.Server.Host.Controllers
 		/// <response code="410">The database entity for the requested instance could not be retrieved. The instance was likely detached.</response>
 		[HttpPost]
 		[TgsAuthorize(InstanceManagerRights.Relocate | InstanceManagerRights.Rename | InstanceManagerRights.SetAutoUpdate | InstanceManagerRights.SetConfiguration | InstanceManagerRights.SetOnline | InstanceManagerRights.SetChatBotLimit)]
-		[ProducesResponseType(typeof(Api.Models.Instance), 200)]
-		[ProducesResponseType(typeof(Api.Models.Instance), 202)]
-		[ProducesResponseType(typeof(ErrorMessage), 410)]
+		[ProducesResponseType(typeof(InstanceResponse), 200)]
+		[ProducesResponseType(typeof(InstanceResponse), 202)]
+		[ProducesResponseType(typeof(ErrorMessageResponse), 410)]
 #pragma warning disable CA1502 // TODO: Decomplexify
-		public async Task<IActionResult> Update([FromBody] Api.Models.Instance model, CancellationToken cancellationToken)
+		public async Task<IActionResult> Update([FromBody] InstanceUpdateRequest model, CancellationToken cancellationToken)
 		{
 			if (model == null)
 				throw new ArgumentNullException(nameof(model));
@@ -378,22 +332,22 @@ namespace Tgstation.Server.Host.Controllers
 			IQueryable<Models.Instance> InstanceQuery() => DatabaseContext
 				.Instances
 				.AsQueryable()
-				.Where(x => x.Id == model.Id);
+				.Where(x => x.Id == model.Id && x.SwarmIdentifer == swarmConfiguration.Identifier);
 
 			var moveJob = await InstanceQuery()
 				.SelectMany(x => x.Jobs).
-#pragma warning disable CA1307 // Specify StringComparison
+#pragma warning disable CA1310 // Specify StringComparison
 				Where(x => !x.StoppedAt.HasValue && x.Description.StartsWith(MoveInstanceJobPrefix))
-#pragma warning restore CA1307 // Specify StringComparison
-				.Select(x => new Models.Job
+#pragma warning restore CA1310 // Specify StringComparison
+				.Select(x => new Job
 				{
-					Id = x.Id
+					Id = x.Id,
 				}).FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
 
 			if (moveJob != default)
 			{
 				// don't allow them to cancel it if they can't start it.
-				if (!AuthenticationContext.User.InstanceManagerRights.Value.HasFlag(InstanceManagerRights.Relocate))
+				if (!AuthenticationContext.PermissionSet.InstanceManagerRights.Value.HasFlag(InstanceManagerRights.Relocate))
 					return Forbid();
 				await jobManager.CancelJob(moveJob, AuthenticationContext.User, true, cancellationToken).ConfigureAwait(false); // cancel it now
 			}
@@ -437,11 +391,11 @@ namespace Tgstation.Server.Host.Controllers
 					if (!userRights.HasFlag(InstanceManagerRights.Relocate))
 						return Forbid();
 					if (originalModel.Online.Value && model.Online != true)
-						return Conflict(new ErrorMessage(ErrorCode.InstanceRelocateOnline));
+						return Conflict(new ErrorMessageResponse(ErrorCode.InstanceRelocateOnline));
 
 					var dirExistsTask = ioManager.DirectoryExists(model.Path, cancellationToken);
 					if (await ioManager.FileExists(model.Path, cancellationToken).ConfigureAwait(false) || await dirExistsTask.ConfigureAwait(false))
-						return Conflict(new ErrorMessage(ErrorCode.InstanceAtExistingPath));
+						return Conflict(new ErrorMessageResponse(ErrorCode.InstanceAtExistingPath));
 
 					originalModelPath = originalModel.Path;
 					originalModel.Path = rawPath;
@@ -469,7 +423,7 @@ namespace Tgstation.Server.Host.Controllers
 					.ConfigureAwait(false);
 
 				if (countOfExistingChatBots > model.ChatBotLimit.Value)
-					return Conflict(new ErrorMessage(ErrorCode.ChatBotMax));
+					return Conflict(new ErrorMessageResponse(ErrorCode.ChatBotMax));
 			}
 
 			await DatabaseContext.Save(cancellationToken).ConfigureAwait(false);
@@ -496,7 +450,7 @@ namespace Tgstation.Server.Host.Controllers
 			}
 			catch (Exception e)
 			{
-				if(!(e is OperationCanceledException))
+				if (!(e is OperationCanceledException))
 					Logger.LogError(e, "Error changing instance online state!");
 				originalModel.Online = originalOnline;
 				originalModel.DreamDaemonSettings.AutoStart = oldAutoStart;
@@ -508,21 +462,21 @@ namespace Tgstation.Server.Host.Controllers
 				throw;
 			}
 
-			var api = (AuthenticationContext.GetRight(RightsType.InstanceManager) & (ulong)InstanceManagerRights.Read) != 0 ? originalModel.ToApi() : new Api.Models.Instance
+			var api = (AuthenticationContext.GetRight(RightsType.InstanceManager) & (ulong)InstanceManagerRights.Read) != 0 ? originalModel.ToApi() : new InstanceResponse
 			{
-				Id = originalModel.Id
+				Id = originalModel.Id,
 			};
 
 			var moving = originalModelPath != null;
 			if (moving)
 			{
-				var job = new Models.Job
+				var job = new Job
 				{
 					Description = $"{MoveInstanceJobPrefix}{originalModel.Id} from {originalModelPath} to {rawPath}",
 					Instance = originalModel,
 					CancelRightsType = RightsType.InstanceManager,
 					CancelRight = (ulong)InstanceManagerRights.Relocate,
-					StartedBy = AuthenticationContext.User
+					StartedBy = AuthenticationContext.User,
 				};
 
 				await jobManager.RegisterOperation(
@@ -548,27 +502,35 @@ namespace Tgstation.Server.Host.Controllers
 		/// <summary>
 		/// List <see cref="Api.Models.Instance"/>s.
 		/// </summary>
+		/// <param name="page">The current page.</param>
+		/// <param name="pageSize">The page size.</param>
 		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
 		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> of the request.</returns>
 		/// <response code="200">Retrieved <see cref="Api.Models.Instance"/>s successfully.</response>
 		[HttpGet(Routes.List)]
 		[TgsAuthorize(InstanceManagerRights.List | InstanceManagerRights.Read)]
-		[ProducesResponseType(typeof(IEnumerable<Api.Models.Instance>), 200)]
-		public async Task<IActionResult> List(CancellationToken cancellationToken)
+		[ProducesResponseType(typeof(PaginatedResponse<InstanceResponse>), 200)]
+		public async Task<IActionResult> List(
+			[FromQuery] int? page,
+			[FromQuery] int? pageSize,
+			CancellationToken cancellationToken)
 		{
 			IQueryable<Models.Instance> GetBaseQuery()
 			{
-				IQueryable<Models.Instance> query = DatabaseContext.Instances;
-				if (!AuthenticationContext.User.InstanceManagerRights.Value.HasFlag(InstanceManagerRights.List))
+				IQueryable<Models.Instance> query = DatabaseContext
+					.Instances
+					.AsQueryable()
+					.Where(x => x.SwarmIdentifer == swarmConfiguration.Identifier);
+				if (!AuthenticationContext.PermissionSet.InstanceManagerRights.Value.HasFlag(InstanceManagerRights.List))
 					query = query
-						.Where(x => x.InstanceUsers.Any(y => y.UserId == AuthenticationContext.User.Id))
-						.Where(x => x.InstanceUsers.Any(instanceUser =>
+						.Where(x => x.InstancePermissionSets.Any(y => y.PermissionSetId == AuthenticationContext.PermissionSet.Id.Value))
+						.Where(x => x.InstancePermissionSets.Any(instanceUser =>
 							instanceUser.ByondRights != ByondRights.None ||
 							instanceUser.ChatBotRights != ChatBotRights.None ||
 							instanceUser.ConfigurationRights != ConfigurationRights.None ||
 							instanceUser.DreamDaemonRights != DreamDaemonRights.None ||
 							instanceUser.DreamMakerRights != DreamMakerRights.None ||
-							instanceUser.InstanceUserRights != InstanceUserRights.None));
+							instanceUser.InstancePermissionSetRights != InstancePermissionSetRights.None));
 
 				// Hack for EF IAsyncEnumerable BS
 				return query.Select(x => x);
@@ -576,29 +538,34 @@ namespace Tgstation.Server.Host.Controllers
 
 			var moveJobs = await GetBaseQuery()
 				.SelectMany(x => x.Jobs)
-#pragma warning disable CA1307 // Specify StringComparison
+#pragma warning disable CA1310 // Specify StringComparison
 				.Where(x => !x.StoppedAt.HasValue && x.Description.StartsWith(MoveInstanceJobPrefix))
-#pragma warning restore CA1307 // Specify StringComparison
+#pragma warning restore CA1310 // Specify StringComparison
 				.Include(x => x.StartedBy).ThenInclude(x => x.CreatedBy)
 				.Include(x => x.Instance)
 				.ToListAsync(cancellationToken)
 				.ConfigureAwait(false);
 
-			var instances = await GetBaseQuery()
-				.ToListAsync(cancellationToken)
-				.ConfigureAwait(false);
-
 			var needsUpdate = false;
-			foreach (var instance in instances)
-				needsUpdate |= InstanceRequiredController.ValidateInstanceOnlineStatus(instanceManager, Logger, instance);
+			var result = await Paginated<Models.Instance, InstanceResponse>(
+				() => Task.FromResult(
+					new PaginatableResult<Models.Instance>(
+						GetBaseQuery()
+							.OrderBy(x => x.Id))),
+				instance =>
+				{
+					needsUpdate |= InstanceRequiredController.ValidateInstanceOnlineStatus(instanceManager, Logger, instance);
+					instance.MoveJob = moveJobs.FirstOrDefault(x => x.Instance.Id == instance.Id)?.ToApi();
+				},
+				page,
+				pageSize,
+				cancellationToken)
+				.ConfigureAwait(false);
 
 			if (needsUpdate)
 				await DatabaseContext.Save(cancellationToken).ConfigureAwait(false);
 
-			var apis = instances.Select(x => x.ToApi());
-			foreach(var I in moveJobs)
-				apis.Where(x => x.Id == I.Instance.Id).First().MoveJob = I.ToApi(); // if this .First() fails i will personally murder kevinz000 because I just know he is somehow responsible
-			return Json(apis);
+			return result;
 		}
 
 		/// <summary>
@@ -611,20 +578,20 @@ namespace Tgstation.Server.Host.Controllers
 		/// <response code="410">The database entity for the requested instance could not be retrieved. The instance was likely detached.</response>
 		[HttpGet("{id}")]
 		[TgsAuthorize(InstanceManagerRights.List | InstanceManagerRights.Read)]
-		[ProducesResponseType(typeof(Api.Models.Instance), 200)]
-		[ProducesResponseType(typeof(ErrorMessage), 410)]
+		[ProducesResponseType(typeof(InstanceResponse), 200)]
+		[ProducesResponseType(typeof(ErrorMessageResponse), 410)]
 		public async Task<IActionResult> GetId(long id, CancellationToken cancellationToken)
 		{
-			var cantList = !AuthenticationContext.User.InstanceManagerRights.Value.HasFlag(InstanceManagerRights.List);
+			var cantList = !AuthenticationContext.PermissionSet.InstanceManagerRights.Value.HasFlag(InstanceManagerRights.List);
 			IQueryable<Models.Instance> QueryForUser()
 			{
 				var query = DatabaseContext
 					.Instances
 					.AsQueryable()
-					.Where(x => x.Id == id);
+					.Where(x => x.Id == id && x.SwarmIdentifer == swarmConfiguration.Identifier);
 
 				if (cantList)
-					query = query.Include(x => x.InstanceUsers);
+					query = query.Include(x => x.InstancePermissionSets);
 				return query;
 			}
 
@@ -636,22 +603,22 @@ namespace Tgstation.Server.Host.Controllers
 			if (InstanceRequiredController.ValidateInstanceOnlineStatus(instanceManager, Logger, instance))
 				await DatabaseContext.Save(cancellationToken).ConfigureAwait(false);
 
-			if (cantList && !instance.InstanceUsers.Any(instanceUser => instanceUser.UserId == AuthenticationContext.User.Id &&
+			if (cantList && !instance.InstancePermissionSets.Any(instanceUser => instanceUser.PermissionSetId == AuthenticationContext.PermissionSet.Id.Value &&
 				(instanceUser.ByondRights != ByondRights.None ||
 				instanceUser.ChatBotRights != ChatBotRights.None ||
 				instanceUser.ConfigurationRights != ConfigurationRights.None ||
 				instanceUser.DreamDaemonRights != DreamDaemonRights.None ||
 				instanceUser.DreamMakerRights != DreamMakerRights.None ||
-				instanceUser.InstanceUserRights != InstanceUserRights.None)))
+				instanceUser.InstancePermissionSetRights != InstancePermissionSetRights.None)))
 				return Forbid();
 
 			var api = instance.ToApi();
 
 			var moveJob = await QueryForUser()
 				.SelectMany(x => x.Jobs)
-#pragma warning disable CA1307 // Specify StringComparison
+#pragma warning disable CA1310 // Specify StringComparison
 				.Where(x => !x.StoppedAt.HasValue && x.Description.StartsWith(MoveInstanceJobPrefix))
-#pragma warning restore CA1307 // Specify StringComparison
+#pragma warning restore CA1310 // Specify StringComparison
 				.Include(x => x.StartedBy).ThenInclude(x => x.CreatedBy)
 				.FirstOrDefaultAsync(cancellationToken)
 				.ConfigureAwait(false);
@@ -669,29 +636,154 @@ namespace Tgstation.Server.Host.Controllers
 		[HttpPatch("{id}")]
 		[TgsAuthorize(InstanceManagerRights.GrantPermissions)]
 		[ProducesResponseType(204)]
+		[ProducesResponseType(typeof(ErrorMessageResponse), 410)]
 		public async Task<IActionResult> GrantPermissions(long id, CancellationToken cancellationToken)
 		{
-			// ensure the current user has write privilege on the instance
-			var usersInstanceUser = await DatabaseContext
+			IQueryable<Models.Instance> BaseQuery() => DatabaseContext
 				.Instances
 				.AsQueryable()
-				.Where(x => x.Id == id)
-				.SelectMany(x => x.InstanceUsers)
-				.Where(x => x.UserId == AuthenticationContext.User.Id)
+				.Where(x => x.Id == id && x.SwarmIdentifer == swarmConfiguration.Identifier);
+
+			// ensure the current user has write privilege on the instance
+			var usersInstancePermissionSet = await BaseQuery()
+				.SelectMany(x => x.InstancePermissionSets)
+				.Where(x => x.PermissionSetId == AuthenticationContext.PermissionSet.Id.Value)
 				.FirstOrDefaultAsync(cancellationToken)
 				.ConfigureAwait(false);
-			if (usersInstanceUser == default)
+			if (usersInstancePermissionSet == default)
 			{
-				var instanceAdminUser = InstanceAdminUser(null);
+				// does the instance actually exist?
+				var instanceExists = await BaseQuery()
+					.AnyAsync(cancellationToken)
+					.ConfigureAwait(false);
+
+				if (!instanceExists)
+					return Gone();
+
+				var instanceAdminUser = InstanceAdminPermissionSet(null);
 				instanceAdminUser.InstanceId = id;
-				DatabaseContext.InstanceUsers.Add(instanceAdminUser);
+				DatabaseContext.InstancePermissionSets.Add(instanceAdminUser);
 			}
 			else
-				InstanceAdminUser(usersInstanceUser);
+				InstanceAdminPermissionSet(usersInstancePermissionSet);
 
 			await DatabaseContext.Save(cancellationToken).ConfigureAwait(false);
 
 			return NoContent();
+		}
+
+		/// <summary>
+		/// Creates a default <see cref="Models.Instance"/> from <paramref name="initialSettings"/>.
+		/// </summary>
+		/// <param name="initialSettings">The <see cref="InstanceCreateRequest"/>.</param>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="Task{TResult}"/> resulting in the new <see cref="Models.Instance"/> or <see langword="null"/> if ports could not be allocated.</returns>
+		async Task<Models.Instance> CreateDefaultInstance(InstanceCreateRequest initialSettings, CancellationToken cancellationToken)
+		{
+			var ddPort = await portAllocator.GetAvailablePort(1, false, cancellationToken).ConfigureAwait(false);
+			if (!ddPort.HasValue)
+				return null;
+
+			// try to use the old default if possible
+			const ushort DefaultDreamDaemonPort = 1337;
+			if (ddPort.Value < DefaultDreamDaemonPort)
+				ddPort = await portAllocator.GetAvailablePort(DefaultDreamDaemonPort, false, cancellationToken).ConfigureAwait(false) ?? ddPort;
+
+			const ushort DefaultApiValidationPort = 1339;
+			var dmPort = await portAllocator
+				.GetAvailablePort(
+					Math.Min((ushort)(ddPort.Value + 1), DefaultApiValidationPort),
+					false,
+					cancellationToken)
+				.ConfigureAwait(false);
+			if (!dmPort.HasValue)
+				return null;
+
+			// try to use the old default if possible
+			if (dmPort < DefaultApiValidationPort)
+				dmPort = await portAllocator.GetAvailablePort(DefaultApiValidationPort, false, cancellationToken).ConfigureAwait(false) ?? dmPort;
+
+			return new Models.Instance
+			{
+				ConfigurationType = initialSettings.ConfigurationType ?? ConfigurationType.Disallowed,
+				DreamDaemonSettings = new DreamDaemonSettings
+				{
+					AllowWebClient = false,
+					AutoStart = false,
+					Port = ddPort,
+					SecurityLevel = DreamDaemonSecurity.Safe,
+					StartupTimeout = 60,
+					HeartbeatSeconds = 60,
+					TopicRequestTimeout = generalConfiguration.ByondTopicTimeout,
+					AdditionalParameters = String.Empty,
+				},
+				DreamMakerSettings = new DreamMakerSettings
+				{
+					ApiValidationPort = dmPort,
+					ApiValidationSecurityLevel = DreamDaemonSecurity.Safe,
+					RequireDMApiValidation = true,
+				},
+				Name = initialSettings.Name,
+				Online = false,
+				Path = initialSettings.Path,
+				AutoUpdateInterval = initialSettings.AutoUpdateInterval ?? 0,
+				ChatBotLimit = initialSettings.ChatBotLimit ?? Models.Instance.DefaultChatBotLimit,
+				RepositorySettings = new RepositorySettings
+				{
+					CommitterEmail = Components.Repository.Repository.DefaultCommitterEmail,
+					CommitterName = Components.Repository.Repository.DefaultCommitterName,
+					PushTestMergeCommits = false,
+					ShowTestMergeCommitters = false,
+					AutoUpdatesKeepTestMerges = false,
+					AutoUpdatesSynchronize = false,
+					PostTestMergeComment = false,
+					CreateGitHubDeployments = false,
+				},
+				InstancePermissionSets = new List<InstancePermissionSet> // give this user full privileges on the instance
+				{
+					InstanceAdminPermissionSet(null),
+				},
+				SwarmIdentifer = swarmConfiguration.Identifier,
+			};
+		}
+
+		/// <summary>
+		/// Generate an <see cref="InstancePermissionSet"/> with full rights.
+		/// </summary>
+		/// <param name="permissionSetToModify">An optional existing <see cref="InstancePermissionSet"/> to update.</param>
+		/// <returns><paramref name="permissionSetToModify"/> or a new <see cref="InstancePermissionSet"/> with full rights.</returns>
+		InstancePermissionSet InstanceAdminPermissionSet(InstancePermissionSet permissionSetToModify)
+		{
+			if (permissionSetToModify == null)
+				permissionSetToModify = new InstancePermissionSet()
+				{
+					PermissionSetId = AuthenticationContext.PermissionSet.Id.Value,
+				};
+			permissionSetToModify.ByondRights = RightsHelper.AllRights<ByondRights>();
+			permissionSetToModify.ChatBotRights = RightsHelper.AllRights<ChatBotRights>();
+			permissionSetToModify.ConfigurationRights = RightsHelper.AllRights<ConfigurationRights>();
+			permissionSetToModify.DreamDaemonRights = RightsHelper.AllRights<DreamDaemonRights>();
+			permissionSetToModify.DreamMakerRights = RightsHelper.AllRights<DreamMakerRights>();
+			permissionSetToModify.RepositoryRights = RightsHelper.AllRights<RepositoryRights>();
+			permissionSetToModify.InstancePermissionSetRights = RightsHelper.AllRights<InstancePermissionSetRights>();
+			return permissionSetToModify;
+		}
+
+		/// <summary>
+		/// Normalize a given <paramref name="path"/> for an instance.
+		/// </summary>
+		/// <param name="path">The path to normalize.</param>
+		/// <returns>The normalized <paramref name="path"/>.</returns>
+		string NormalizePath(string path)
+		{
+			if (path == null)
+				return null;
+
+			path = ioManager.ResolvePath(path);
+			if (platformIdentifier.IsWindows)
+				path = path.ToUpperInvariant().Replace('\\', '/');
+
+			return path;
 		}
 	}
 }

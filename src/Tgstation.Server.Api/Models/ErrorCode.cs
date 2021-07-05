@@ -1,10 +1,10 @@
-using System;
+﻿using System;
 using System.ComponentModel;
 
 namespace Tgstation.Server.Api.Models
 {
 	/// <summary>
-	/// Types of <see cref="ErrorMessage"/>s that the API may return.
+	/// Types of <see cref="Response.ErrorMessageResponse"/>s that the API may return.
 	/// </summary>
 	/// <remarks>Entries marked with the <see cref="ObsoleteAttribute"/> are no longer in use but kept for reference.</remarks>
 	public enum ErrorCode : uint
@@ -40,7 +40,7 @@ namespace Tgstation.Server.Api.Models
 		BadHeaders,
 
 		/// <summary>
-		/// Attempted to request a <see cref="Token"/> with an existing <see cref="Token"/>.
+		/// Attempted to request a <see cref="Response.TokenResponse"/> with an existing <see cref="Response.TokenResponse"/>.
 		/// </summary>
 		[Description("Cannot generate a bearer token using a bearer token!")]
 		TokenWithToken,
@@ -64,10 +64,10 @@ namespace Tgstation.Server.Api.Models
 		CannotChangeServerSuite,
 
 		/// <summary>
-		/// A required GitHub API request failed.
+		/// A required remote API request failed.
 		/// </summary>
-		[Description("A required GitHub request returned an API error!")]
-		GitHubApiError,
+		[Description("A required remote API request returned an error!")]
+		RemoteApiError,
 
 		/// <summary>
 		/// A server update was requested while another was in progress.
@@ -76,43 +76,43 @@ namespace Tgstation.Server.Api.Models
 		ServerUpdateInProgress,
 
 		/// <summary>
-		/// Attempted to change something other than the capitalization of a <see cref="Internal.User.Name"/>.
+		/// Attempted to change something other than the capitalization of a <see cref="UserName.Name"/> for a user.
 		/// </summary>
 		[Description("Can only change the capitalization of a user's name!")]
 		UserNameChange,
 
 		/// <summary>
-		/// Attempted to change a <see cref="Internal.User.SystemIdentifier"/>.
+		/// Attempted to change a <see cref="Internal.UserModelBase.SystemIdentifier"/>.
 		/// </summary>
 		[Description("Cannot change a user's systemIdentifier!")]
 		UserSidChange,
 
 		/// <summary>
-		/// Attempted to create a <see cref="User"/> with a <see cref="Internal.User.Name"/> and <see cref="Internal.User.SystemIdentifier"/>.
+		/// Attempted to create a user with a <see cref="UserName.Name"/> and <see cref="Internal.UserModelBase.SystemIdentifier"/>.
 		/// </summary>
 		[Description("A user cannot have both a name and systemIdentifier!")]
 		UserMismatchNameSid,
 
 		/// <summary>
-		/// Attempted to create a <see cref="User"/> with a <see cref="UserUpdate.Password"/> and <see cref="Internal.User.SystemIdentifier"/>.
+		/// Attempted to create a user with a <see cref="Request.UserUpdateRequest.Password"/> and <see cref="Internal.UserModelBase.SystemIdentifier"/>.
 		/// </summary>
 		[Description("A user cannot have both a password and systemIdentifier!")]
 		UserMismatchPasswordSid,
 
 		/// <summary>
-		/// The given <see cref="UserUpdate.Password"/> length was less than the server's configured minimum.
+		/// The given <see cref="Request.UserUpdateRequest.Password"/> length was less than the server's configured minimum.
 		/// </summary>
 		[Description("The given password is less than the server's configured minimum password length!")]
 		UserPasswordLength,
 
 		/// <summary>
-		/// Attempted to create a <see cref="User"/> with a ':' in the <see cref="Internal.User.Name"/>.
+		/// Attempted to create a user with a ':' character in the <see cref="UserName.Name"/>.
 		/// </summary>
 		[Description("User names cannot contain the ':' character!")]
 		UserColonInName,
 
 		/// <summary>
-		/// Attempted to create a <see cref="User"/> with a <see langword="null"/> or whitespace <see cref="Internal.User.Name"/>.
+		/// Attempted to create a user with a <see langword="null"/> or whitespace <see cref="UserName.Name"/>.
 		/// </summary>
 		[Description("User's name is missing or invalid whitespace!")]
 		UserMissingName,
@@ -148,7 +148,7 @@ namespace Tgstation.Server.Api.Models
 		InstanceLimitReached,
 
 		/// <summary>
-		/// Attempted to create an <see cref="Instance"/> with a whitespace <see cref="Instance.Name"/>.
+		/// Attempted to create an <see cref="Instance"/> with a whitespace <see cref="NamedEntity.Name"/>.
 		/// </summary>
 		[Description("Instance names cannot be whitespace!")]
 		InstanceWhitespaceName,
@@ -166,7 +166,7 @@ namespace Tgstation.Server.Api.Models
 		RequiresPosixSystemIdentity,
 
 		/// <summary>
-		/// A <see cref="ConfigurationFile"/> was attem updated
+		/// A <see cref="IConfigurationFile"/> was updated.
 		/// </summary>
 		[Description("This existing file hash does not match, the file has beeen updated!")]
 		ConfigurationFileUpdated,
@@ -178,10 +178,11 @@ namespace Tgstation.Server.Api.Models
 		ConfigurationDirectoryNotEmpty,
 
 		/// <summary>
-		/// Tried to clone a repository with a missing <see cref="Repository.Origin"/> property.
+		/// Currently unused.
 		/// </summary>
-		[Description("Cannot clone repository with missing origin field!")]
-		RepoMissingOrigin,
+		[Obsolete("Unused", true)]
+		[Description("Unknown error code.")]
+		UnusedErrorCode1,
 
 		/// <summary>
 		/// One of <see cref="Internal.RepositorySettings.AccessUser"/> and <see cref="Internal.RepositorySettings.AccessToken"/> is set while the other isn't.
@@ -214,27 +215,28 @@ namespace Tgstation.Server.Api.Models
 		RepoMissing,
 
 		/// <summary>
-		/// Attempted to <see cref="Repository.CheckoutSha"/> and set <see cref="Repository.Reference"/> at the same time.
+		/// Attempted to <see cref="Request.RepositoryUpdateRequest.CheckoutSha"/> and set <see cref="Internal.RepositoryApiBase.Reference"/> at the same time.
 		/// </summary>
 		[Description("Cannot checkoutSha and set reference at the same time!")]
 		RepoMismatchShaAndReference,
 
 		/// <summary>
-		/// Attempted to <see cref="Repository.CheckoutSha"/> and <see cref="Repository.UpdateFromOrigin"/> at the same time.
+		/// Attempted to <see cref="Request.RepositoryUpdateRequest.CheckoutSha"/> and <see cref="Request.RepositoryUpdateRequest.UpdateFromOrigin"/> at the same time.
 		/// </summary>
 		[Description("Cannot checkoutSha and updateFromOrigin at the same time!")]
 		RepoMismatchShaAndUpdate,
 
 		/// <summary>
-		/// Attempted to change the origin of an existing repository.
+		/// Currently unused.
 		/// </summary>
-		[Description("Cannot change the origin of an existing repository, delete and recreate it instead!")]
-		RepoCantChangeOrigin,
+		[Obsolete("Unused", true)]
+		[Description("Unknown error code.")]
+		UnusedErrorCode2,
 
 		/// <summary>
-		/// <see cref="Repository.NewTestMerges"/> contained duplicate <see cref="TestMergeParameters.Number"/>s.
+		/// <see cref="Request.RepositoryUpdateRequest.NewTestMerges"/> contained duplicate <see cref="TestMergeParameters.Number"/>s.
 		/// </summary>
-		[Description("The same pull request was present more than once in the test merge requests or is already merged!")]
+		[Description("The same test merge was present more than once or is already merged!")]
 		RepoDuplicateTestMerge,
 
 		/// <summary>
@@ -250,58 +252,56 @@ namespace Tgstation.Server.Api.Models
 		RepoWhitespaceCommitterEmail,
 
 		/// <summary>
-		/// Deprecated.
+		/// A paginated request asked for too large a page.
 		/// </summary>
-		[Description("Deprecated error code.")]
-		[Obsolete("With API v7 ", true)]
-		DreamDaemonDuplicatePorts,
+		[Description("Requested pageSize is too large!")]
+		ApiPageTooLarge,
 
 		/// <summary>
-		/// Deprecated.
+		/// A paginated request asked for page 0.
 		/// </summary>
-		[Description("Deprecated error code.")]
-		[Obsolete("With DMAPI-5.0.0, ultrasafe security is now supported.", true)]
-		InvalidSecurityLevel,
+		[Description("Cannot request page or pageSize <= 0.")]
+		ApiInvalidPageOrPageSize,
 
 		/// <summary>
-		/// A requested <see cref="ChatChannel"/>'s data does not match with its <see cref="Internal.ChatBot.Provider"/>.
+		/// A requested <see cref="ChatChannel"/>'s data does not match with its <see cref="Internal.ChatBotSettings.Provider"/>.
 		/// </summary>
 		[Description("One or more of the channels for one or more of the provided chat bots do not have the correct channel data for their provider!")]
 		ChatBotWrongChannelType,
 
 		/// <summary>
-		/// <see cref="Internal.ChatBot.ConnectionString"/> was whitespace.
+		/// <see cref="Internal.ChatBotSettings.ConnectionString"/> was whitespace.
 		/// </summary>
 		[Description("A chat bot's connection string cannot be whitespace!")]
 		ChatBotWhitespaceConnectionString,
 
 		/// <summary>
-		/// <see cref="Internal.ChatBot.Name"/> was whitespace.
+		/// Chat bot <see cref="NamedEntity.Name"/> was whitespace.
 		/// </summary>
 		[Description("A chat bot's name cannot be whitespace!")]
 		ChatBotWhitespaceName,
 
 		/// <summary>
-		/// <see cref="Internal.ChatBot.Provider"/> was <see langword="null"/> during creation.
+		/// <see cref="Internal.ChatBotSettings.Provider"/> was <see langword="null"/> during creation.
 		/// </summary>
 		[Description("Missing chat bot provider!")]
 		ChatBotProviderMissing,
 
 		/// <summary>
-		/// Attempted to update a <see cref="User"/> or <see cref="InstanceUser"/> without its ID.
+		/// Currently unused.
 		/// </summary>
-		[Description("Missing user ID!")]
-		[Obsolete("Deprecated in favor of code 2", true)]
-		UserMissingId,
+		[Obsolete("Unused", true)]
+		[Description("Unknown error code.")]
+		UnusedErrorCode3,
 
 		/// <summary>
-		/// Attempted to add a <see cref="ChatBot"/> when at or above the <see cref="Instance.ChatBotLimit"/> or it was set to something lower than the existing amount of <see cref="ChatBot"/>.
+		/// Attempted to add a chat bot when at or above the <see cref="Instance.ChatBotLimit"/> or it was set to something lower than the existing amount of chat bots.
 		/// </summary>
 		[Description("Performing this operation would violate the instance's configured chatBotLimit!")]
 		ChatBotMax,
 
 		/// <summary>
-		/// Attempted to configure a <see cref="ChatBot"/> with more <see cref="ChatChannel"/>s than the configured limit
+		/// Attempted to configure a chat bot with more <see cref="ChatChannel"/>s than the configured <see cref="Internal.ChatBotSettings.ChannelLimit"/>.
 		/// </summary>
 		[Description("Set amount of chatChannels exceeds the configured channelLimit!")]
 		ChatBotMaxChannels,
@@ -337,11 +337,10 @@ namespace Tgstation.Server.Api.Models
 		DreamMakerInvalidValidation,
 
 		/// <summary>
-		/// DMAPI validation timeout.
+		/// Tried to remove the last <see cref="OAuthConnection"/> for a passwordless user.
 		/// </summary>
-		[Description("The DreamDaemon startup timeout was hit before the DMAPI validated!")]
-		[Obsolete("Deprecated in favor of error code 52", true)]
-		DreamMakerValidationTimeout,
+		[Description("This user is passwordless and removing their oAuthConnections would leave them with no authentication method!")]
+		CannotRemoveLastAuthenticationOption,
 
 		/// <summary>
 		/// No .dme could be found for deployment.
@@ -368,19 +367,19 @@ namespace Tgstation.Server.Api.Models
 		DreamMakerCompileJobInProgress,
 
 		/// <summary>
-		/// Missing <see cref="DreamDaemon"/> settings in database.
+		/// Missing <see cref="Internal.DreamDaemonSettings"/> in database.
 		/// </summary>
 		[Description("Could not retrieve DreamDaemon settings from the database!")]
 		InstanceMissingDreamDaemonSettings,
 
 		/// <summary>
-		/// Missing <see cref="DreamMaker"/> settings in database.
+		/// Missing <see cref="Internal.DreamMakerSettings"/> in database.
 		/// </summary>
 		[Description("Could not retrieve DreamMaker settings from the database!")]
 		InstanceMissingDreamMakerSettings,
 
 		/// <summary>
-		/// Missing <see cref="Repository"/> settings in database.
+		/// Missing <see cref="Internal.RepositorySettings"/> in database.
 		/// </summary>
 		[Description("Could not retrieve Repository settings from the database!")]
 		InstanceMissingRepositorySettings,
@@ -404,7 +403,7 @@ namespace Tgstation.Server.Api.Models
 		RepoCannotAuthenticate,
 
 		/// <summary>
-		/// Cannot perform operation while not on a <see cref="Repository.Reference"/>.
+		/// Cannot perform operation while not on a <see cref="Internal.RepositoryApiBase.Reference"/>.
 		/// </summary>
 		[Description("This git operation requires the repository HEAD to currently be on a tracked reference!")]
 		RepoReferenceRequired,
@@ -416,7 +415,7 @@ namespace Tgstation.Server.Api.Models
 		WatchdogRunning,
 
 		/// <summary>
-		/// Attempted to start the watchdog with a corrupted <see cref="CompileJob"/>.
+		/// Attempted to start the watchdog with a corrupted <see cref="Internal.CompileJob"/>.
 		/// </summary>
 		[Description("Cannot launch active compile job as it is missing or corrupted!")]
 		WatchdogCompileJobCorrupted,
@@ -440,7 +439,7 @@ namespace Tgstation.Server.Api.Models
 		RepoUnsupportedTestMergeRemote,
 
 		/// <summary>
-		/// Either <see cref="Repository.CheckoutSha"/> or <see cref="Repository.Reference"/> was in one when it should have been the other.
+		/// Either <see cref="Request.RepositoryUpdateRequest.CheckoutSha"/> or <see cref="Internal.RepositoryApiBase.Reference"/> was in one when it should have been the other.
 		/// </summary>
 		[Description("The value set for checkoutSha or reference should be in the other field!")]
 		RepoSwappedShaOrReference,
@@ -452,7 +451,7 @@ namespace Tgstation.Server.Api.Models
 		RepoMergeConflict,
 
 		/// <summary>
-		/// The current <see cref="Repository.Reference"/> does not track a remote reference.
+		/// The current <see cref="Internal.RepositoryApiBase.Reference"/> does not track a remote reference.
 		/// </summary>
 		[Description("The repository's current reference is unsuitable for this operation as it does not track a remote reference!")]
 		RepoReferenceNotTracking,
@@ -460,17 +459,17 @@ namespace Tgstation.Server.Api.Models
 		/// <summary>
 		/// Encounted merge conflicts while test merging.
 		/// </summary>
-		[Description("Encountered merge conflicts while test merging one or more pull requests!")]
+		[Description("Encountered merge conflicts while test merging one or more sources!")]
 		RepoTestMergeConflict,
 
 		/// <summary>
-		/// Attempted to create an instance outside of the <see cref="Internal.ServerInformation.ValidInstancePaths"/>.
+		/// Attempted to create an instance outside of the <see cref="Internal.ServerInformationBase.ValidInstancePaths"/>.
 		/// </summary>
 		[Description("The new instance's path is not under a white-listed path.")]
 		InstanceNotAtWhitelistedPath,
 
 		/// <summary>
-		/// Attempted to make a DreamDaemon update with both <see cref="DreamDaemon.SoftRestart"/> and <see cref="DreamDaemon.SoftShutdown"/> set.
+		/// Attempted to make a DreamDaemon update with both <see cref="Internal.DreamDaemonApiBase.SoftRestart"/> and <see cref="Internal.DreamDaemonApiBase.SoftShutdown"/> set.
 		/// </summary>
 		[Description("Cannot set both softShutdown and softReboot at once!")]
 		DreamDaemonDoubleSoft,
@@ -563,6 +562,66 @@ namespace Tgstation.Server.Api.Models
 		/// An attempt to connect a chat bot failed.
 		/// </summary>
 		[Description("Failed to connect chat bot!")]
-		ChatCannotConnectProvider
+		ChatCannotConnectProvider,
+
+		/// <summary>
+		/// Attempt to add DreamDaemon to the list of firewall exempt processes failed.
+		/// </summary>
+		[Description("Failed to allow DreamDaemon through the Windows firewall!")]
+		ByondDreamDaemonFirewallFail,
+
+		/// <summary>
+		/// Attempted to create an instance but no free ports could be found.
+		/// </summary>
+		[Description("TGS was unable to find a free port to allocate for the operation!")]
+		NoPortsAvailable,
+
+		/// <summary>
+		/// Attempted to set a port which is either in use by another part of TGS or otherwise not available for binding.
+		/// </summary>
+		[Description("The requested port is either already in use by TGS or could not be allocated!")]
+		PortNotAvailable,
+
+		/// <summary>
+		/// Attempted to set <see cref="Internal.UserApiBase.OAuthConnections"/> for the admin user.
+		/// </summary>
+		[Description("The admin user cannot use OAuth connections!")]
+		AdminUserCannotOAuth,
+
+		/// <summary>
+		/// Attempted to login with a disabled OAuth provider.
+		/// </summary>
+		[Description("The requested OAuth provider is disabled via configuration!")]
+		OAuthProviderDisabled,
+
+		/// <summary>
+		/// A job requiring a file upload did not receive it before timing out.
+		/// </summary>
+		[Description("The job did not receive a required upload before timing out!")]
+		FileUploadExpired,
+
+		/// <summary>
+		/// Tried to update a user to have both a <see cref="Internal.UserApiBase.Group"/> and <see cref="Internal.UserApiBase.PermissionSet"/>
+		/// </summary>
+		[Description("A user may not have both a permissionSet and group!")]
+		UserGroupAndPermissionSet,
+
+		/// <summary>
+		/// Tried to delete a non-empty user group.
+		/// </summary>
+		[Description("Cannot delete the user group as it is not empty!")]
+		UserGroupNotEmpty,
+
+		/// <summary>
+		/// Attempted to create a user but the configured limit has been reached.
+		/// </summary>
+		[Description("The user cannot be created because the configured limit has been reached!")]
+		UserLimitReached,
+
+		/// <summary>
+		/// Attempted to create a user group but the configured limit has been reached.
+		/// </summary>
+		[Description("The user group cannot be created because the configured limit has been reached!")]
+		UserGroupLimitReached,
 	}
 }

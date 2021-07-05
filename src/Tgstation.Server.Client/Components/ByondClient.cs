@@ -1,43 +1,61 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+
 using Tgstation.Server.Api;
 using Tgstation.Server.Api.Models;
+using Tgstation.Server.Api.Models.Request;
+using Tgstation.Server.Api.Models.Response;
 
 namespace Tgstation.Server.Client.Components
 {
 	/// <inheritdoc />
-	sealed class ByondClient : IByondClient
+	sealed class ByondClient : PaginatedClient, IByondClient
 	{
 		/// <summary>
-		/// The <see cref="IApiClient"/> for the <see cref="ByondClient"/>
-		/// </summary>
-		readonly IApiClient apiClient;
-
-		/// <summary>
-		/// The <see cref="Instance"/> for the <see cref="ByondClient"/>
+		/// The <see cref="Instance"/> for the <see cref="ByondClient"/>.
 		/// </summary>
 		readonly Instance instance;
 
 		/// <summary>
-		/// Construct a <see cref="ByondClient"/>
+		/// Initializes a new instance of the <see cref="ByondClient"/> class.
 		/// </summary>
-		/// <param name="apiClient">The value of <see cref="apiClient"/></param>
-		/// <param name="instance">The value of <see cref="Instance"/></param>
+		/// <param name="apiClient">The <see cref="IApiClient"/> for the <see cref="PaginatedClient"/>.</param>
+		/// <param name="instance">The value of <see cref="Instance"/>.</param>
 		public ByondClient(IApiClient apiClient, Instance instance)
+			: base(apiClient)
 		{
-			this.apiClient = apiClient ?? throw new ArgumentNullException(nameof(apiClient));
 			this.instance = instance ?? throw new ArgumentNullException(nameof(instance));
 		}
 
 		/// <inheritdoc />
-		public Task<Byond> ActiveVersion(CancellationToken cancellationToken) => apiClient.Read<Byond>(Routes.Byond, instance.Id, cancellationToken);
+		public Task<ByondResponse> ActiveVersion(CancellationToken cancellationToken) => ApiClient.Read<ByondResponse>(Routes.Byond, instance.Id!.Value, cancellationToken);
 
 		/// <inheritdoc />
-		public Task<IReadOnlyList<Byond>> InstalledVersions(CancellationToken cancellationToken) => apiClient.Read<IReadOnlyList<Byond>>(Routes.ListRoute(Routes.Byond), instance.Id, cancellationToken);
+		public Task<IReadOnlyList<ByondResponse>> InstalledVersions(PaginationSettings? paginationSettings, CancellationToken cancellationToken)
+			=> ReadPaged<ByondResponse>(paginationSettings, Routes.ListRoute(Routes.Byond), instance.Id, cancellationToken);
 
 		/// <inheritdoc />
-		public Task<Byond> SetActiveVersion(Byond byond, CancellationToken cancellationToken) => apiClient.Update<Byond, Byond>(Routes.Byond, byond ?? throw new ArgumentNullException(nameof(byond)), instance.Id, cancellationToken);
+		public async Task<ByondInstallResponse> SetActiveVersion(ByondVersionRequest installRequest, Stream zipFileStream, CancellationToken cancellationToken)
+		{
+			if (installRequest == null)
+				throw new ArgumentNullException(nameof(installRequest));
+			if (installRequest.UploadCustomZip == true && zipFileStream == null)
+				throw new ArgumentNullException(nameof(zipFileStream));
+
+			var result = await ApiClient.Update<ByondVersionRequest, ByondInstallResponse>(
+				Routes.Byond,
+				installRequest,
+				instance.Id!.Value,
+				cancellationToken)
+				.ConfigureAwait(false);
+
+			if (installRequest.UploadCustomZip == true)
+				await ApiClient.Upload(result, zipFileStream, cancellationToken).ConfigureAwait(false);
+
+			return result;
+		}
 	}
 }

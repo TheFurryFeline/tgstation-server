@@ -1,14 +1,16 @@
-using Byond.TopicSender;
-using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
-using Serilog.Context;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
+
+using Byond.TopicSender;
+using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
+using Serilog.Context;
+
 using Tgstation.Server.Api;
 using Tgstation.Server.Api.Models;
 using Tgstation.Server.Host.Components.Byond;
@@ -66,12 +68,17 @@ namespace Tgstation.Server.Host.Components.Session
 		public Task OnPrime => primeTcs.Task;
 
 		/// <inheritdoc />
-		public bool DMApiAvailable => reattachInformation.Dmb.CompileJob.DMApiVersion?.Major == DMApiConstants.Version.Major;
+		public bool DMApiAvailable => reattachInformation.Dmb.CompileJob.DMApiVersion?.Major == DMApiConstants.InteropVersion.Major;
 
 		/// <summary>
-		/// The up to date <see cref="ReattachInformation"/>
+		/// The up to date <see cref="ReattachInformation"/>.
 		/// </summary>
 		readonly ReattachInformation reattachInformation;
+
+		/// <summary>
+		/// The <see cref="TaskCompletionSource{TResult}"/> that completes when DD makes it's first bridge request.
+		/// </summary>
+		readonly TaskCompletionSource<object> initialBridgeRequestTcs;
 
 		/// <summary>
 		/// The <see cref="Instance"/> metadata.
@@ -84,37 +91,37 @@ namespace Tgstation.Server.Host.Components.Session
 		readonly CancellationTokenSource reattachTopicCts;
 
 		/// <summary>
-		/// The <see cref="ITopicClient"/> for the <see cref="SessionController"/>
+		/// The <see cref="ITopicClient"/> for the <see cref="SessionController"/>.
 		/// </summary>
 		readonly ITopicClient byondTopicSender;
 
 		/// <summary>
-		/// The <see cref="IBridgeRegistration"/> for the <see cref="SessionController"/>
+		/// The <see cref="IBridgeRegistration"/> for the <see cref="SessionController"/>.
 		/// </summary>
 		readonly IBridgeRegistration bridgeRegistration;
 
 		/// <summary>
-		/// The <see cref="IProcess"/> for the <see cref="SessionController"/>
+		/// The <see cref="IProcess"/> for the <see cref="SessionController"/>.
 		/// </summary>
 		readonly IProcess process;
 
 		/// <summary>
-		/// The <see cref="IByondExecutableLock"/> for the <see cref="SessionController"/>
+		/// The <see cref="IByondExecutableLock"/> for the <see cref="SessionController"/>.
 		/// </summary>
 		readonly IByondExecutableLock byondLock;
 
 		/// <summary>
-		/// The <see cref="IChatTrackingContext"/> for the <see cref="SessionController"/>
+		/// The <see cref="IChatTrackingContext"/> for the <see cref="SessionController"/>.
 		/// </summary>
 		readonly IChatTrackingContext chatTrackingContext;
 
 		/// <summary>
-		/// The <see cref="IChatManager"/> for the <see cref="SessionController"/>
+		/// The <see cref="IChatManager"/> for the <see cref="SessionController"/>.
 		/// </summary>
 		readonly IChatManager chat;
 
 		/// <summary>
-		/// The <see cref="ILogger"/> for the <see cref="SessionController"/>
+		/// The <see cref="ILogger"/> for the <see cref="SessionController"/>.
 		/// </summary>
 		readonly ILogger<SessionController> logger;
 
@@ -124,17 +131,17 @@ namespace Tgstation.Server.Host.Components.Session
 		readonly object synchronizationLock;
 
 		/// <summary>
-		/// The <see cref="TaskCompletionSource{TResult}"/> <see cref="SetPort(ushort, CancellationToken)"/> waits on when DreamDaemon currently has it's ports closed
+		/// The <see cref="TaskCompletionSource{TResult}"/> <see cref="SetPort(ushort, CancellationToken)"/> waits on when DreamDaemon currently has it's ports closed.
 		/// </summary>
 		TaskCompletionSource<bool> portAssignmentTcs;
 
 		/// <summary>
-		/// The port to assign DreamDaemon when it queries for it
+		/// The port to assign DreamDaemon when it queries for it.
 		/// </summary>
 		ushort? nextPort;
 
 		/// <summary>
-		/// The <see cref="TaskCompletionSource{TResult}"/> that completes when DD tells us about a reboot
+		/// The <see cref="TaskCompletionSource{TResult}"/> that completes when DD tells us about a reboot.
 		/// </summary>
 		TaskCompletionSource<object> rebootTcs;
 
@@ -144,40 +151,40 @@ namespace Tgstation.Server.Host.Components.Session
 		TaskCompletionSource<object> primeTcs;
 
 		/// <summary>
-		/// If we know DreamDaemon currently has it's port closed
+		/// If we know DreamDaemon currently has it's port closed.
 		/// </summary>
 		bool portClosedForReboot;
 
 		/// <summary>
-		/// If the <see cref="SessionController"/> has been disposed
+		/// If the <see cref="SessionController"/> has been disposed.
 		/// </summary>
 		bool disposed;
 
 		/// <summary>
-		/// The <see cref="ApiValidationStatus"/> for the <see cref="SessionController"/>
+		/// The <see cref="ApiValidationStatus"/> for the <see cref="SessionController"/>.
 		/// </summary>
 		ApiValidationStatus apiValidationStatus;
 
 		/// <summary>
-		/// If <see cref="process"/> should be kept alive instead
+		/// If <see cref="process"/> should be kept alive instead.
 		/// </summary>
 		bool released;
 
 		/// <summary>
-		/// Construct a <see cref="SessionController"/>
+		/// Initializes a new instance of the <see cref="SessionController"/> class.
 		/// </summary>
-		/// <param name="reattachInformation">The value of <see cref="reattachInformation"/></param>
+		/// <param name="reattachInformation">The value of <see cref="reattachInformation"/>.</param>
 		/// <param name="metadata">The owning <see cref="Instance"/>.</param>
-		/// <param name="process">The value of <see cref="process"/></param>
-		/// <param name="byondLock">The value of <see cref="byondLock"/></param>
-		/// <param name="byondTopicSender">The value of <see cref="byondTopicSender"/></param>
+		/// <param name="process">The value of <see cref="process"/>.</param>
+		/// <param name="byondLock">The value of <see cref="byondLock"/>.</param>
+		/// <param name="byondTopicSender">The value of <see cref="byondTopicSender"/>.</param>
 		/// <param name="bridgeRegistrar">The <see cref="IBridgeRegistrar"/> used to populate <see cref="bridgeRegistration"/>.</param>
-		/// <param name="chat">The value of <see cref="chat"/></param>
-		/// <param name="chatTrackingContext">The value of <see cref="chatTrackingContext"/></param>
+		/// <param name="chat">The value of <see cref="chat"/>.</param>
+		/// <param name="chatTrackingContext">The value of <see cref="chatTrackingContext"/>.</param>
 		/// <param name="assemblyInformationProvider">The <see cref="IAssemblyInformationProvider"/> for the <see cref="SessionController"/>.</param>
-		/// <param name="logger">The value of <see cref="logger"/></param>
+		/// <param name="logger">The value of <see cref="logger"/>.</param>
 		/// <param name="postLifetimeCallback">The <see cref="Func{TResult}"/> returning a <see cref="Task"/> to be run after the <paramref name="process"/> ends.</param>
-		/// <param name="startupTimeout">The optional time to wait before failing the <see cref="LaunchResult"/></param>
+		/// <param name="startupTimeout">The optional time to wait before failing the <see cref="LaunchResult"/>.</param>
 		/// <param name="reattached">If this is a reattached session.</param>
 		/// <param name="apiValidate">If this is a DMAPI validation session.</param>
 		public SessionController(
@@ -207,6 +214,17 @@ namespace Tgstation.Server.Host.Components.Session
 			this.chat = chat ?? throw new ArgumentNullException(nameof(chat));
 			this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
+			portClosedForReboot = false;
+			disposed = false;
+			apiValidationStatus = ApiValidationStatus.NeverValidated;
+			released = false;
+
+			rebootTcs = new TaskCompletionSource<object>();
+			primeTcs = new TaskCompletionSource<object>();
+			initialBridgeRequestTcs = new TaskCompletionSource<object>();
+			reattachTopicCts = new CancellationTokenSource();
+			synchronizationLock = new object();
+
 			if (apiValidate || DMApiAvailable)
 			{
 				bridgeRegistration = bridgeRegistrar.RegisterHandler(this);
@@ -218,16 +236,6 @@ namespace Tgstation.Server.Host.Components.Session
 					reattachInformation.Dmb.CompileJob.DMApiVersion == null
 						? "no"
 						: $"incompatible ({reattachInformation.Dmb.CompileJob.DMApiVersion})");
-
-			portClosedForReboot = false;
-			disposed = false;
-			apiValidationStatus = ApiValidationStatus.NeverValidated;
-			released = false;
-
-			rebootTcs = new TaskCompletionSource<object>();
-			primeTcs = new TaskCompletionSource<object>();
-			reattachTopicCts = new CancellationTokenSource();
-			synchronizationLock = new object();
 
 			async Task<int> WrapLifetime()
 			{
@@ -241,7 +249,8 @@ namespace Tgstation.Server.Host.Components.Session
 			LaunchResult = GetLaunchResult(
 				assemblyInformationProvider,
 				startupTimeout,
-				reattached);
+				reattached,
+				apiValidate);
 
 			logger.LogDebug(
 				"Created session controller. CommsKey: {0}, Port: {1}",
@@ -279,99 +288,41 @@ namespace Tgstation.Server.Host.Components.Session
 			}
 		}
 
-		/// <summary>
-		/// The <see cref="Task{TResult}"/> for <see cref="LaunchResult"/>.
-		/// </summary>
-		/// <param name="assemblyInformationProvider">The <see cref="IAssemblyInformationProvider"/>.</param>
-		/// <param name="startupTimeout">The, optional, startup timeout in seconds.</param>
-		/// <param name="reattached">If DreamDaemon was reattached.</param>
-		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="Session.LaunchResult"/> for the operation.</returns>
-		async Task<LaunchResult> GetLaunchResult(
-			IAssemblyInformationProvider assemblyInformationProvider,
-			uint? startupTimeout,
-			bool reattached)
-		{
-			var startTime = DateTimeOffset.Now;
-			Task toAwait = process.Startup;
-
-			if (startupTimeout.HasValue)
-				toAwait = Task.WhenAny(process.Startup, Task.Delay(startTime.AddSeconds(startupTimeout.Value) - startTime));
-
-			await toAwait.ConfigureAwait(false);
-
-			var result = new LaunchResult
-			{
-				ExitCode = process.Lifetime.IsCompleted ? (int?)await process.Lifetime.ConfigureAwait(false) : null,
-				StartupTime = process.Startup.IsCompleted ? (TimeSpan?)(DateTimeOffset.Now - startTime) : null
-			};
-
-			logger.LogTrace("Launch result: {0}", result);
-
-			if (!result.ExitCode.HasValue && reattached && !disposed)
-			{
-				var reattachResponse = await SendCommand(
-					new TopicParameters(
-						assemblyInformationProvider.Version,
-						reattachInformation.RuntimeInformation.ServerPort),
-					reattachTopicCts.Token)
-					.ConfigureAwait(false);
-
-				if (reattachResponse != null)
-				{
-					if (reattachResponse.InteropResponse?.CustomCommands != null)
-						chatTrackingContext.CustomCommands = reattachResponse.InteropResponse.CustomCommands;
-					else if (reattachResponse.InteropResponse != null)
-						logger.LogWarning(
-							"DMAPI v{0} isn't returning the TGS custom commands list. Functionality added in v5.2.0.",
-							CompileJob.DMApiVersion.Semver());
-				}
-			}
-
-			return result;
-		}
-
 		/// <inheritdoc />
-		public async Task<BridgeResponse> ProcessBridgeRequest(BridgeParameters parameters, CancellationToken cancellationToken)
+		public Task<BridgeResponse> ProcessBridgeRequest(BridgeParameters parameters, CancellationToken cancellationToken)
 		{
 			if (parameters == null)
 				throw new ArgumentNullException(nameof(parameters));
 
+			static Task<BridgeResponse> Error(string message) => Task.FromResult(new BridgeResponse
+			{
+				ErrorMessage = message,
+			});
+
 			using (LogContext.PushProperty("Instance", metadata.Id))
 			{
 				logger.LogTrace("Handling bridge request...");
+				initialBridgeRequestTcs.TrySetResult(null);
+
 				var response = new BridgeResponse();
 				switch (parameters.CommandType)
 				{
 					case BridgeCommandType.ChatSend:
 						if (parameters.ChatMessage == null)
-							return new BridgeResponse
-							{
-								ErrorMessage = "Missing chatMessage field!"
-							};
+							return Error("Missing chatMessage field!");
 
 						if (parameters.ChatMessage.ChannelIds == null)
-							return new BridgeResponse
-							{
-								ErrorMessage = "Missing channelIds field in chatMessage!"
-							};
+							return Error("Missing channelIds field in chatMessage!");
 
 						if (parameters.ChatMessage.ChannelIds.Any(channelIdString => !UInt64.TryParse(channelIdString, out var _)))
-							return new BridgeResponse
-							{
-								ErrorMessage = "Invalid channelIds in chatMessage!"
-							};
+							return Error("Invalid channelIds in chatMessage!");
 
 						if (parameters.ChatMessage.Text == null)
-							return new BridgeResponse
-							{
-								ErrorMessage = "Missing message field in chatMessage!"
-							};
+							return Error("Missing message field in chatMessage!");
 
-						await chat.SendMessage(
+						chat.QueueMessage(
 							parameters.ChatMessage.Text,
-							parameters.ChatMessage.ChannelIds.Select(UInt64.Parse),
-							cancellationToken)
-							.ConfigureAwait(false);
+							parameters.ChatMessage.ChannelIds.Select(UInt64.Parse));
 						break;
 					case BridgeCommandType.Prime:
 						var oldPrimeTcs = primeTcs;
@@ -390,10 +341,7 @@ namespace Tgstation.Server.Host.Components.Session
 							{
 								/////UHHHH
 								logger.LogWarning("DreamDaemon sent new port command without providing it's own!");
-								return new BridgeResponse
-								{
-									ErrorMessage = "Missing stringified port as data parameter!"
-								};
+								return Error("Missing stringified port as data parameter!");
 							}
 
 							var currentPort = parameters.CurrentPort.Value;
@@ -420,19 +368,13 @@ namespace Tgstation.Server.Host.Components.Session
 					case BridgeCommandType.Startup:
 						apiValidationStatus = ApiValidationStatus.BadValidationRequest;
 						if (parameters.Version == null)
-							return new BridgeResponse
-							{
-								ErrorMessage = "Missing dmApiVersion field!"
-							};
+							return Error("Missing dmApiVersion field!");
 
 						DMApiVersion = parameters.Version;
-						if (DMApiVersion.Major != DMApiConstants.Version.Major)
+						if (DMApiVersion.Major != DMApiConstants.InteropVersion.Major)
 						{
 							apiValidationStatus = ApiValidationStatus.Incompatible;
-							return new BridgeResponse
-							{
-								ErrorMessage = "Incompatible dmApiVersion!"
-							};
+							return Error("Incompatible dmApiVersion!");
 						}
 
 						switch (parameters.MinimumSecurityLevel)
@@ -447,18 +389,21 @@ namespace Tgstation.Server.Host.Components.Session
 								apiValidationStatus = ApiValidationStatus.RequiresTrusted;
 								break;
 							case null:
-								return new BridgeResponse
-								{
-									ErrorMessage = "Missing minimumSecurityLevel field!"
-								};
+								return Error("Missing minimumSecurityLevel field!");
 							default:
-								return new BridgeResponse
-								{
-									ErrorMessage = "Invalid minimumSecurityLevel!"
-								};
+								return Error("Invalid minimumSecurityLevel!");
 						}
 
-						response.RuntimeInformation = reattachInformation.RuntimeInformation;
+						logger.LogTrace("ApiValidationStatus set to {0}", apiValidationStatus);
+
+						response.RuntimeInformation = new RuntimeInformation(
+							chatTrackingContext,
+							reattachInformation.Dmb,
+							reattachInformation.RuntimeInformation.ServerVersion,
+							reattachInformation.RuntimeInformation.InstanceName,
+							reattachInformation.RuntimeInformation.SecurityLevel,
+							reattachInformation.RuntimeInformation.ServerPort,
+							reattachInformation.RuntimeInformation.ApiValidateOnly);
 
 						// Load custom commands
 						chatTrackingContext.CustomCommands = parameters.CustomCommands;
@@ -483,17 +428,8 @@ namespace Tgstation.Server.Host.Components.Session
 						break;
 				}
 
-				return response;
+				return Task.FromResult(response);
 			}
-		}
-
-		/// <summary>
-		/// Throws an <see cref="ObjectDisposedException"/> if <see cref="DisposeAsync"/> has been called
-		/// </summary>
-		void CheckDisposed()
-		{
-			if (disposed)
-				throw new ObjectDisposedException(nameof(SessionController));
 		}
 
 		/// <inheritdoc />
@@ -541,7 +477,8 @@ namespace Tgstation.Server.Host.Components.Session
 			logger.LogTrace("Topic request: {0}", json);
 			try
 			{
-				var commandString = String.Format(CultureInfo.InvariantCulture,
+				var commandString = String.Format(
+					CultureInfo.InvariantCulture,
 					"?{0}={1}",
 					byondTopicSender.SanitizeString(DMApiConstants.TopicData),
 					byondTopicSender.SanitizeString(json));
@@ -567,7 +504,7 @@ namespace Tgstation.Server.Host.Components.Session
 
 						logger.LogTrace("Interop response: {0}", topicReturn);
 					}
-					catch(Exception ex)
+					catch (Exception ex)
 					{
 						logger.LogWarning(ex, "Invalid interop response: {0}", topicReturn);
 					}
@@ -671,7 +608,10 @@ namespace Tgstation.Server.Host.Components.Session
 
 		/// <inheritdoc />
 		public Task InstanceRenamed(string newInstanceName, CancellationToken cancellationToken)
-			=> SendCommand(new TopicParameters(newInstanceName), cancellationToken);
+		{
+			reattachInformation.RuntimeInformation.InstanceName = newInstanceName;
+			return SendCommand(new TopicParameters(newInstanceName), cancellationToken);
+		}
 
 		/// <inheritdoc />
 		public Task UpdateChannels(IEnumerable<ChannelRepresentation> newChannels, CancellationToken cancellationToken)
@@ -682,5 +622,76 @@ namespace Tgstation.Server.Host.Components.Session
 
 		/// <inheritdoc />
 		public Task CreateDump(string outputFile, CancellationToken cancellationToken) => process.CreateDump(outputFile, cancellationToken);
+
+		/// <summary>
+		/// The <see cref="Task{TResult}"/> for <see cref="LaunchResult"/>.
+		/// </summary>
+		/// <param name="assemblyInformationProvider">The <see cref="IAssemblyInformationProvider"/>.</param>
+		/// <param name="startupTimeout">The, optional, startup timeout in seconds.</param>
+		/// <param name="reattached">If DreamDaemon was reattached.</param>
+		/// <param name="apiValidate">If this is a DMAPI validation session.</param>
+		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="Session.LaunchResult"/> for the operation.</returns>
+		async Task<LaunchResult> GetLaunchResult(
+			IAssemblyInformationProvider assemblyInformationProvider,
+			uint? startupTimeout,
+			bool reattached,
+			bool apiValidate)
+		{
+			var startTime = DateTimeOffset.UtcNow;
+			var useBridgeRequestForLaunchResult = !reattached && (apiValidate || DMApiAvailable);
+			var startupTask = useBridgeRequestForLaunchResult
+				? initialBridgeRequestTcs.Task
+				: process.Startup;
+			var toAwait = Task.WhenAny(startupTask, process.Lifetime);
+
+			if (startupTimeout.HasValue)
+				toAwait = Task.WhenAny(toAwait, Task.Delay(TimeSpan.FromSeconds(startupTimeout.Value)));
+
+			logger.LogTrace(
+				"Waiting for LaunchResult based on {0}{1}...",
+				useBridgeRequestForLaunchResult ? "initial bridge request" : "process startup",
+				startupTimeout.HasValue ? $" with a timeout of {startupTimeout.Value}s" : String.Empty);
+
+			await toAwait.ConfigureAwait(false);
+
+			var result = new LaunchResult
+			{
+				ExitCode = process.Lifetime.IsCompleted ? (int?)await process.Lifetime.ConfigureAwait(false) : null,
+				StartupTime = startupTask.IsCompleted ? (TimeSpan?)(DateTimeOffset.UtcNow - startTime) : null,
+			};
+
+			logger.LogTrace("Launch result: {0}", result);
+
+			if (!result.ExitCode.HasValue && reattached && !disposed)
+			{
+				var reattachResponse = await SendCommand(
+					new TopicParameters(
+						assemblyInformationProvider.Version,
+						reattachInformation.RuntimeInformation.ServerPort),
+					reattachTopicCts.Token)
+					.ConfigureAwait(false);
+
+				if (reattachResponse != null)
+				{
+					if (reattachResponse.InteropResponse?.CustomCommands != null)
+						chatTrackingContext.CustomCommands = reattachResponse.InteropResponse.CustomCommands;
+					else if (reattachResponse.InteropResponse != null)
+						logger.LogWarning(
+							"DMAPI v{0} isn't returning the TGS custom commands list. Functionality added in v5.2.0.",
+							CompileJob.DMApiVersion.Semver());
+				}
+			}
+
+			return result;
+		}
+
+		/// <summary>
+		/// Throws an <see cref="ObjectDisposedException"/> if <see cref="DisposeAsync"/> has been called.
+		/// </summary>
+		void CheckDisposed()
+		{
+			if (disposed)
+				throw new ObjectDisposedException(nameof(SessionController));
+		}
 	}
 }

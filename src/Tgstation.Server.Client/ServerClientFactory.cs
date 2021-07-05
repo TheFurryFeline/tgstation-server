@@ -4,8 +4,9 @@ using System.Linq;
 using System.Net.Http.Headers;
 using System.Threading;
 using System.Threading.Tasks;
+
 using Tgstation.Server.Api;
-using Tgstation.Server.Api.Models;
+using Tgstation.Server.Api.Models.Response;
 
 namespace Tgstation.Server.Client
 {
@@ -13,19 +14,19 @@ namespace Tgstation.Server.Client
 	public sealed class ServerClientFactory : IServerClientFactory
 	{
 		/// <summary>
-		/// The <see cref="IApiClientFactory"/> for the <see cref="ServerClientFactory"/>
+		/// The <see cref="IApiClientFactory"/> for the <see cref="ServerClientFactory"/>.
 		/// </summary>
 		static readonly IApiClientFactory ApiClientFactory = new ApiClientFactory();
 
 		/// <summary>
-		/// The <see cref="ProductHeaderValue"/> for the <see cref="ServerClientFactory"/>
+		/// The <see cref="ProductHeaderValue"/> for the <see cref="ServerClientFactory"/>.
 		/// </summary>
 		readonly ProductHeaderValue productHeaderValue;
 
 		/// <summary>
-		/// Construct a <see cref="ServerClientFactory"/>
+		/// Initializes a new instance of the <see cref="ServerClientFactory"/> class.
 		/// </summary>
-		/// <param name="productHeaderValue">The value of <see cref="productHeaderValue"/></param>
+		/// <param name="productHeaderValue">The value of <see cref="productHeaderValue"/>.</param>
 		public ServerClientFactory(ProductHeaderValue productHeaderValue)
 		{
 			this.productHeaderValue = productHeaderValue ?? throw new ArgumentNullException(nameof(productHeaderValue));
@@ -38,7 +39,7 @@ namespace Tgstation.Server.Client
 			string password,
 			IEnumerable<IRequestLogger>? requestLoggers = null,
 			TimeSpan? timeout = null,
-			bool attemptRefreshLogin = true,
+			bool attemptLoginRefresh = true,
 			CancellationToken cancellationToken = default)
 		{
 			if (host == null)
@@ -50,7 +51,7 @@ namespace Tgstation.Server.Client
 
 			requestLoggers ??= Enumerable.Empty<IRequestLogger>();
 
-			Token token;
+			TokenResponse token;
 			var loginHeaders = new ApiHeaders(productHeaderValue, username, password);
 			using (var api = ApiClientFactory.CreateApiClient(host, loginHeaders, null))
 			{
@@ -59,8 +60,11 @@ namespace Tgstation.Server.Client
 
 				if (timeout.HasValue)
 					api.Timeout = timeout.Value;
-				token = await api.Update<Token>(Routes.Root, cancellationToken).ConfigureAwait(false);
+				token = await api.Update<TokenResponse>(Routes.Root, cancellationToken).ConfigureAwait(false);
 			}
+
+			if (!attemptLoginRefresh)
+				loginHeaders = null;
 
 			var apiHeaders = new ApiHeaders(productHeaderValue, token.Bearer!);
 
@@ -75,7 +79,7 @@ namespace Tgstation.Server.Client
 		}
 
 		/// <inheritdoc />
-		public IServerClient CreateFromToken(Uri host, Token token)
+		public IServerClient CreateFromToken(Uri host, TokenResponse token)
 		{
 			if (host == null)
 				throw new ArgumentNullException(nameof(host));

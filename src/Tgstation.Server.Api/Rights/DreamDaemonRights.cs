@@ -3,7 +3,7 @@
 namespace Tgstation.Server.Api.Rights
 {
 	/// <summary>
-	/// Rights for <see cref="Models.DreamDaemon"/>
+	/// Rights for managing DreamDaemon.
 	/// </summary>
 	[Flags]
 	public enum DreamDaemonRights : ulong
@@ -14,7 +14,7 @@ namespace Tgstation.Server.Api.Rights
 		None = 0,
 
 		/// <summary>
-		/// User can read <see cref="Models.DreamDaemon.ActiveCompileJob"/> and <see cref="Models.DreamDaemon.StagedCompileJob"/>
+		/// User can read <see cref="Models.Response.DreamDaemonResponse.ActiveCompileJob"/> and <see cref="Models.Response.DreamDaemonResponse.StagedCompileJob"/>
 		/// </summary>
 		ReadRevision = 1,
 
@@ -34,7 +34,7 @@ namespace Tgstation.Server.Api.Rights
 		SetSecurity = 8,
 
 		/// <summary>
-		/// User can read all ports, <see cref="Models.DreamDaemon.SoftRestart"/>, <see cref="Models.DreamDaemon.SoftShutdown"/>, <see cref="Models.DreamDaemon.Status"/>, <see cref="Models.Internal.DreamDaemonLaunchParameters.AllowWebClient"/>, and <see cref="Models.Internal.DreamDaemonSettings.AutoStart"/>
+		/// User can read every property of <see cref="Models.Response.DreamDaemonResponse"/> except <see cref="Models.Response.DreamDaemonResponse.ActiveCompileJob"/> and <see cref="Models.Response.DreamDaemonResponse.StagedCompileJob"/>.
 		/// </summary>
 		ReadMetadata = 16,
 
@@ -44,27 +44,27 @@ namespace Tgstation.Server.Api.Rights
 		SetWebClient = 32,
 
 		/// <summary>
-		/// User can change <see cref="Models.DreamDaemon.SoftRestart"/>
+		/// User can change <see cref="Models.Internal.DreamDaemonApiBase.SoftRestart"/>.
 		/// </summary>
 		SoftRestart = 64,
 
 		/// <summary>
-		/// User can change <see cref="Models.DreamDaemon.SoftShutdown"/>
+		/// User can change <see cref="Models.Internal.DreamDaemonApiBase.SoftShutdown"/>.
 		/// </summary>
 		SoftShutdown = 128,
 
 		/// <summary>
-		/// User can immediately restart <see cref="Models.DreamDaemon"/>
+		/// User can immediately restart the Watchdog.
 		/// </summary>
 		Restart = 256,
 
 		/// <summary>
-		/// User can immediately shutdown <see cref="Models.DreamDaemon"/>
+		/// User can immediately shutdown the Watchdog.
 		/// </summary>
 		Shutdown = 512,
 
 		/// <summary>
-		/// User can start <see cref="Models.DreamDaemon"/>.
+		/// User can start the Watchdog.
 		/// </summary>
 		Start = 1024,
 
@@ -87,5 +87,10 @@ namespace Tgstation.Server.Api.Rights
 		/// User can change <see cref="Models.Internal.DreamDaemonLaunchParameters.TopicRequestTimeout"/>.
 		/// </summary>
 		SetTopicTimeout = 16384,
+
+		/// <summary>
+		/// User can change <see cref="Models.Internal.DreamDaemonLaunchParameters.AdditionalParameters"/>.
+		/// </summary>
+		SetAdditionalParameters = 32768,
 	}
 }

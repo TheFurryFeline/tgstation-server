@@ -1,4 +1,4 @@
-﻿using Octokit;
+using Octokit;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -34,10 +34,6 @@ namespace ReleaseNotes
 
 			var doNotCloseMilestone = args.Length > 1 && args[1].ToUpperInvariant() == "--NO-CLOSE";
 
-			string propsPath = "../../../../../build/Version.props";
-			if (args.Length > 1 && !doNotCloseMilestone)
-				propsPath = args[1];
-
 			const string ReleaseNotesEnvVar = "TGS4_RELEASE_NOTES_TOKEN";
 			var githubToken = Environment.GetEnvironmentVariable(ReleaseNotesEnvVar);
 			if (String.IsNullOrWhiteSpace(githubToken) && !doNotCloseMilestone)
@@ -49,7 +45,7 @@ namespace ReleaseNotes
 			try
 			{
 				var client = new GitHubClient(new ProductHeaderValue("tgs_release_notes"));
-				if (!String.IsNullOrWhiteSpace(githubToken)) 
+				if (!String.IsNullOrWhiteSpace(githubToken))
 				{
 					client.Credentials = new Credentials(githubToken);
 				}
@@ -64,7 +60,6 @@ namespace ReleaseNotes
 				{
 					Milestone = $"v{versionString}",
 					Type = IssueTypeQualifier.PullRequest,
-					State = ItemState.Closed,
 					Repos = { { RepoOwner, RepoName } }
 				}).ConfigureAwait(false);
 
@@ -77,7 +72,7 @@ namespace ReleaseNotes
 
 				Task<Milestone> milestoneTask = null;
 				var milestoneTaskLock = new object();
-				var releaseDictionary = new Dictionary<string, List<Tuple<string, int>>>(StringComparer.OrdinalIgnoreCase);
+				var releaseDictionary = new Dictionary<string, List<Tuple<string, int, string>>>(StringComparer.OrdinalIgnoreCase);
 				var authorizedUsers = new Dictionary<long, Task<bool>>();
 
 				bool postControlPanelMessage = false;
@@ -86,6 +81,20 @@ namespace ReleaseNotes
 				{
 					//need to check it was merged
 					var fullPR = await client.Repository.PullRequest.Get(RepoOwner, RepoName, pullRequest.Number).ConfigureAwait(false);
+
+					if (!fullPR.Merged)
+					{
+						if (!doNotCloseMilestone && fullPR.Milestone != null)
+						{
+							Console.WriteLine($"Removing trash PR #{fullPR.Number} from milestone...");
+							await client.Issue.Update(RepoOwner, RepoName, fullPR.Number, new IssueUpdate
+							{
+								Milestone = null
+							}).ConfigureAwait(false);
+						}
+
+						return;
+					}
 
 					async Task<Milestone> GetMilestone()
 					{
@@ -99,7 +108,7 @@ namespace ReleaseNotes
 							milestoneTask = GetMilestone();
 
 					// if (!fullPR.Merged)
-						//return;
+					//return;
 
 					async Task BuildNotesFromComment(string comment, User user)
 					{
@@ -141,7 +150,7 @@ namespace ReleaseNotes
 								foreach (var I in notes)
 									Console.WriteLine(component + " #" + fullPR.Number + " - " + I + " (@" + user.Login + ")");
 
-								var tupleSelector = notes.Select(note => Tuple.Create(note, fullPR.Number));
+								var tupleSelector = notes.Select(note => Tuple.Create(note, fullPR.Number, user.Login));
 								if (releaseDictionary.TryGetValue(component, out var currentValues))
 									currentValues.AddRange(tupleSelector);
 								else
@@ -174,6 +183,7 @@ namespace ReleaseNotes
 							}
 							if (trimmedLine.Length == 0)
 								continue;
+
 							notes.Add(trimmedLine);
 						}
 					}
@@ -237,13 +247,21 @@ namespace ReleaseNotes
 				switch (releasingSuite)
 				{
 					case 4:
-						var doc = XDocument.Load(propsPath);
+						const string PropsPath = "build/Version.props";
+						const string ControlPanelPropsPath = "build/ControlPanelVersion.props";
+
+						var doc = XDocument.Load(PropsPath);
 						var project = doc.Root;
 						var xmlNamespace = project.GetDefaultNamespace();
-						var versionsPropertyGroup = project.Elements().First();
+						var versionsPropertyGroup = project.Elements().First(x => x.Name == xmlNamespace + "PropertyGroup");
+
+						var doc2 = XDocument.Load(ControlPanelPropsPath);
+						var project2 = doc2.Root;
+						var controlPanelXmlNamespace = project2.GetDefaultNamespace();
+						var controlPanelVersionsPropertyGroup = project2.Elements().First(x => x.Name == controlPanelXmlNamespace + "PropertyGroup");
 
 						var coreVersion = Version.Parse(versionsPropertyGroup.Element(xmlNamespace + "TgsCoreVersion").Value);
-						if(coreVersion != version)
+						if (coreVersion != version)
 						{
 							Console.WriteLine("Received a different version on command line than in Version.props!");
 							return 10;
@@ -252,13 +270,14 @@ namespace ReleaseNotes
 						var apiVersion = Version.Parse(versionsPropertyGroup.Element(xmlNamespace + "TgsApiVersion").Value);
 						var configVersion = Version.Parse(versionsPropertyGroup.Element(xmlNamespace + "TgsConfigVersion").Value);
 						var dmApiVersion = Version.Parse(versionsPropertyGroup.Element(xmlNamespace + "TgsDmapiVersion").Value);
-						var webControlVersion = Version.Parse(versionsPropertyGroup.Element(xmlNamespace + "TgsControlPanelVersion").Value);
+						var interopVersion = Version.Parse(versionsPropertyGroup.Element(xmlNamespace + "TgsInteropVersion").Value);
+						var webControlVersion = Version.Parse(controlPanelVersionsPropertyGroup.Element(controlPanelXmlNamespace + "TgsControlPanelVersion").Value);
 						var hostWatchdogVersion = Version.Parse(versionsPropertyGroup.Element(xmlNamespace + "TgsHostWatchdogVersion").Value);
 
 						if (webControlVersion.Major == 0)
 							postControlPanelMessage = true;
 
-						prefix = $"Please refer to the [README](https://github.com/tgstation/tgstation-server#setup) for setup instructions.{Environment.NewLine}{Environment.NewLine}#### Component Versions\nCore: {coreVersion}\nConfiguration: {configVersion}\nHTTP API: {apiVersion}\nDreamMaker API: {dmApiVersion}\n[Web Control Panel](https://github.com/tgstation/tgstation-server-control-panel): {webControlVersion}\nHost Watchdog: {hostWatchdogVersion}";
+						prefix = $"Please refer to the [README](https://github.com/tgstation/tgstation-server#setup) for setup instructions.{Environment.NewLine}{Environment.NewLine}#### Component Versions\nCore: {coreVersion}\nConfiguration: {configVersion}\nHTTP API: {apiVersion}\nDreamMaker API: {dmApiVersion} (Interop: {interopVersion})\n[Web Control Panel](https://github.com/tgstation/tgstation-server-webpanel): {webControlVersion}\nHost Watchdog: {hostWatchdogVersion}";
 						break;
 					case 3:
 						prefix = "The /tg/station server suite";
@@ -296,57 +315,16 @@ namespace ReleaseNotes
 					Console.WriteLine("Unable to detemine milestone!");
 					return 9;
 				}
-				newNotes.Append(milestone.HtmlUrl);
-				newNotes.Append("?closed=1)");
-				newNotes.Append(Environment.NewLine);
-
-				await Task.WhenAll(tasks).ConfigureAwait(false);
-
-				if (releaseDictionary.Count == 0)
-				{
-					Console.WriteLine("No release notes for this milestone!");
-					return 8;
-				}
-
-				foreach (var I in releaseDictionary.OrderBy(kvp => kvp.Key))
-				{
-					newNotes.Append(Environment.NewLine);
-					newNotes.Append("#### ");
-					newNotes.Append(I.Key);
-
-
-					foreach (var noteTuple in I.Value)
-					{
-						newNotes.Append(Environment.NewLine);
-						newNotes.Append("- ");
-						newNotes.Append(noteTuple.Item1);
-						newNotes.Append(" (#");
-						newNotes.Append(noteTuple.Item2);
-						newNotes.Append(')');
-					}
-
-					newNotes.Append(Environment.NewLine);
-				}
-
-				newNotes.Append(Environment.NewLine);
-
-				if (version != new Version(4, 1, 0))
-					newNotes.Append(oldNotes);
-
-				const string OutputPath = "release_notes.md";
-				Console.WriteLine($"Writing out new release notes to {Path.GetFullPath(OutputPath)}...");
-				var releaseNotes = newNotes.ToString();
-				await File.WriteAllTextAsync(OutputPath, releaseNotes).ConfigureAwait(false);
 
 				if (doNotCloseMilestone)
 					Console.WriteLine("Not closing milestone due to parameter!");
 				else
 				{
 					Console.WriteLine("Closing milestone...");
-					await client.Issue.Milestone.Update(RepoOwner, RepoName, milestone.Number, new MilestoneUpdate
+					tasks.Add(client.Issue.Milestone.Update(RepoOwner, RepoName, milestone.Number, new MilestoneUpdate
 					{
 						State = ItemState.Closed
-					}).ConfigureAwait(false);
+					}));
 
 					// Create the next patch milestone
 					var nextPatchMilestoneName = $"v{version.Major}.{version.Minor}.{version.Build + 1}";
@@ -373,21 +351,101 @@ namespace ReleaseNotes
 									Repos = { { RepoOwner, RepoName } }
 								});
 
-								foreach(var I in issuesInUnusedMilestone.Items)
-									await client.Issue.Update(RepoOwner, RepoName, I.Number, new IssueUpdate
+								var issueUpdateTasks = new List<Task>();
+								foreach (var I in issuesInUnusedMilestone.Items)
+								{
+									issueUpdateTasks.Add(client.Issue.Update(RepoOwner, RepoName, I.Number, new IssueUpdate
 									{
 										Milestone = I.State.Value == ItemState.Closed ? milestone.Number : nextPatchMilestone.Number
-									});
+									}));
+
+									if (I.PullRequest != null)
+									{
+										Console.WriteLine($"Adding additional merged PR #{I.Number}...");
+										tasks.Add(GetReleaseNotesFromPR(I));
+									}
+								}
+
+								await Task.WhenAll(issueUpdateTasks).ConfigureAwait(false);
 							}
-							await client.Issue.Milestone.Delete(RepoOwner, RepoName, milestoneToDelete.Number).ConfigureAwait(false);
+
+							tasks.Add(client.Issue.Milestone.Delete(RepoOwner, RepoName, milestoneToDelete.Number));
 						}
 
 						// Create the next minor milestone
-						var nextMinorMilestone = $"v{version.Major}.{version.Minor + 1}.0";
-						Console.WriteLine($"Creating milestone {nextMinorMilestone}...");
-						await client.Issue.Milestone.Create(RepoOwner, RepoName, new NewMilestone(nextMinorMilestone));
+						var nextMinorMilestoneName = $"v{version.Major}.{version.Minor + 1}.0";
+						Console.WriteLine($"Creating milestone {nextMinorMilestoneName}...");
+						var nextMinorMilestoneTask = client.Issue.Milestone.Create(RepoOwner, RepoName, new NewMilestone(nextMinorMilestoneName));
+						tasks.Add(nextMinorMilestoneTask);
+
+						// Move unfinished stuff to new minor milestone
+						if (milestone.OpenIssues > 0)
+						{
+							Console.WriteLine($"Moving abandoned {milestone.OpenIssues} issue(s) from previous milestone to new one...");
+							var abandonedIssues = await client.Search.SearchIssues(new SearchIssuesRequest
+							{
+								Milestone = milestone.Title,
+								Repos = { { RepoOwner, RepoName } },
+								State = ItemState.Open
+							});
+
+							if (abandonedIssues.Items.Any())
+							{
+								var nextMinorMilestone = await nextMinorMilestoneTask.ConfigureAwait(false);
+								foreach (var I in abandonedIssues.Items)
+									tasks.Add(client.Issue.Update(RepoOwner, RepoName, I.Number, new IssueUpdate
+									{
+										Milestone = nextMinorMilestone.Number
+									}));
+							}
+						}
 					}
 				}
+
+				newNotes.Append(milestone.HtmlUrl);
+				newNotes.Append("?closed=1)");
+				newNotes.Append(Environment.NewLine);
+
+				await Task.WhenAll(tasks).ConfigureAwait(false);
+
+				if (releaseDictionary.Count == 0)
+				{
+					Console.WriteLine("No release notes for this milestone!");
+					return 8;
+				}
+
+				foreach (var I in releaseDictionary.OrderBy(kvp => kvp.Key))
+				{
+					newNotes.Append(Environment.NewLine);
+					newNotes.Append("#### ");
+					newNotes.Append(I.Key);
+
+
+					foreach (var noteTuple in I.Value)
+					{
+						newNotes.Append(Environment.NewLine);
+						newNotes.Append("- ");
+						newNotes.Append(noteTuple.Item1);
+						newNotes.Append(" (#");
+						newNotes.Append(noteTuple.Item2);
+						newNotes.Append(" @");
+						newNotes.Append(noteTuple.Item3);
+						newNotes.Append(')');
+					}
+
+					newNotes.Append(Environment.NewLine);
+				}
+
+				newNotes.Append(Environment.NewLine);
+
+				if (version != new Version(4, 1, 0))
+					newNotes.Append(oldNotes);
+
+				const string OutputPath = "release_notes.md";
+				Console.WriteLine($"Writing out new release notes to {Path.GetFullPath(OutputPath)}...");
+				var releaseNotes = newNotes.ToString();
+				await File.WriteAllTextAsync(OutputPath, releaseNotes).ConfigureAwait(false);
+
 
 				return 0;
 			}

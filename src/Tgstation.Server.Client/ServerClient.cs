@@ -1,8 +1,9 @@
 ﻿using System;
 using System.Threading;
 using System.Threading.Tasks;
+
 using Tgstation.Server.Api;
-using Tgstation.Server.Api.Models;
+using Tgstation.Server.Api.Models.Response;
 
 namespace Tgstation.Server.Client
 {
@@ -13,7 +14,7 @@ namespace Tgstation.Server.Client
 		public Uri Url => apiClient.Url;
 
 		/// <inheritdoc />
-		public Token Token
+		public TokenResponse Token
 		{
 			get => token;
 			set
@@ -39,22 +40,25 @@ namespace Tgstation.Server.Client
 		/// <inheritdoc />
 		public IUsersClient Users { get; }
 
+		/// <inheritdoc />
+		public IUserGroupsClient Groups { get; }
+
 		/// <summary>
-		/// The <see cref="IApiClient"/> for the <see cref="ServerClient"/>
+		/// The <see cref="IApiClient"/> for the <see cref="ServerClient"/>.
 		/// </summary>
 		readonly IApiClient apiClient;
 
 		/// <summary>
-		/// Backing field for <see cref="Token"/>
+		/// Backing field for <see cref="Token"/>.
 		/// </summary>
-		Token token;
+		TokenResponse token;
 
 		/// <summary>
-		/// Construct a <see cref="ServerClient"/>
+		/// Initializes a new instance of the <see cref="ServerClient"/> class.
 		/// </summary>
-		/// <param name="apiClient">The value of <see cref="apiClient"/></param>
-		/// <param name="token">The value of <see cref="Token"/></param>
-		public ServerClient(IApiClient apiClient, Token token)
+		/// <param name="apiClient">The value of <see cref="apiClient"/>.</param>
+		/// <param name="token">The value of <see cref="Token"/>.</param>
+		public ServerClient(IApiClient apiClient, TokenResponse token)
 		{
 			this.apiClient = apiClient ?? throw new ArgumentNullException(nameof(apiClient));
 			this.token = token ?? throw new ArgumentNullException(nameof(token));
@@ -65,13 +69,14 @@ namespace Tgstation.Server.Client
 			Instances = new InstanceManagerClient(apiClient);
 			Users = new UsersClient(apiClient);
 			Administration = new AdministrationClient(apiClient);
+			Groups = new UserGroupsClient(apiClient);
 		}
 
 		/// <inheritdoc />
 		public void Dispose() => apiClient.Dispose();
 
 		/// <inheritdoc />
-		public Task<ServerInformation> Version(CancellationToken cancellationToken) => apiClient.Read<ServerInformation>(Routes.Root, cancellationToken);
+		public Task<ServerInformationResponse> ServerInformation(CancellationToken cancellationToken) => apiClient.Read<ServerInformationResponse>(Routes.Root, cancellationToken);
 
 		/// <inheritdoc />
 		public void AddRequestLogger(IRequestLogger requestLogger) => apiClient.AddRequestLogger(requestLogger);

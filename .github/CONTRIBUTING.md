@@ -99,6 +99,7 @@ DON'T:
 - Use the static keyword on fields where avoidable
 - Use the public keyword where avoidable
 - Handle Tasks in a synchronous fashion
+- Use static methods from built-in keywords i.e. Use `Boolean.TryParse` instead of `bool.TryParse`
 
 ### Formatting
 
@@ -118,7 +119,7 @@ void Hello()
 ```
 This is good:
 ```C#
-void Hello() 
+void Hello()
 {
 	if (!thing1)
 		return;
@@ -170,7 +171,7 @@ There is no strict process when it comes to merging pull requests. Pull requests
 
 Whenever you make a change to a model schema that must be reflected in the database, you'll have to generate and write a migration for it on all supported database types.
 
-We have a script to do this. 
+We have a script to do this.
 
 1. Run `build/GenerateMigrations.sh NameOfMigration` from the project root.
 1. You should now have MY/MS migration files generated in `/src/Tgstation.Server.Host/Models/Migrations`. Fix compiler warnings in the generated files. Ensure all classes are in the Tgstation.Server.Host.Models.Migrations namespace.
@@ -187,6 +188,20 @@ We have a script to do this.
 1. Run `dotnet ef migrations add PG<NameOfYourMigration> --context PostgresSqlDatabaseContext`
 1. Run `dotnet ef migrations add SL<NameOfYourMigration> --context SqliteDatabaseContext`.
 1. Follow the above steps.
+
+## Adding OAuth Providers
+
+OAuth providers are hardcoded but it is fairly easy to add new ones. The flow doesn't need to be strict OAuth either (r.e. /tg/ forums). Follow the following steps:
+
+1. Add the name to the [Tgstation.Server.Api.Models.OAuthProviders](../src/Tgstation.Server.Api/Models/OAuthProviders.cs) enum (Also necessitates a minor HTTP API version bump).
+1. Create an implementation of [IOAuthValidator](../src/Tgstation.Server.Host/Security/OAuth/IOAuthValidator.cs).
+	- Most providers can simply override the [GenericOAuthValidator](../src/Tgstation.Server.Host/Security/OAuth/GenericOAuthValidator.cs).
+1. Construct the implementation in the [OAuthProviders](../src/Tgstation.Server.Host/Security/OAuth/OAuthProviders.cs) class.
+1. Add a null entry to the default [appsettings.yml](../src/Tgstation.Server.Host/appsettings.yml).
+1. Update the main [README.md](../README.md) to indicate the new provider.
+1. Update the [API documentation](../docs/API.dox) to indicate the new provider.
+
+TGS should now be able to accept authentication response tokens from your provider.
 
 ### Important Note About the \[Required\] Attribute.
 
@@ -235,7 +250,7 @@ Word commit names descriptively. Only submit work through pull requests. When do
 
 At the time of this writing, the repository is configured to automate much of the deployment/release process.
 
-When the new API or client is ready to be released, update the `Version.props` file appropriately and merge the pull request with the text `[APIDeploy]` or `[NuGetDeploy]` respectively in the commit message (or both!). The release will be published automatically.
+When the new API, client, or DMAPI is ready to be released, update the `Version.props` file appropriately and merge the pull request with the text `[APIDeploy]`, `[NuGetDeploy]`, or `[DMDeploy]` respectively in the commit message (or all three!). The release will be published automatically.
 
 That step should be taken for the latest API and client before releasing the core version that uses them if applicable.
 

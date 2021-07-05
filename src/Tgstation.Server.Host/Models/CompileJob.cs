@@ -1,30 +1,33 @@
 ﻿using System;
 using System.ComponentModel.DataAnnotations;
 
+using Tgstation.Server.Api.Models;
+using Tgstation.Server.Api.Models.Response;
+
 namespace Tgstation.Server.Host.Models
 {
 	/// <inheritdoc />
-	public sealed class CompileJob : Api.Models.Internal.CompileJob
+	public sealed class CompileJob : Api.Models.Internal.CompileJob, IApiTransformable<CompileJobResponse>
 	{
 		/// <summary>
-		/// See <see cref="Api.Models.CompileJob.Job"/>
+		/// See <see cref="CompileJobResponse.Job"/>.
 		/// </summary>
 		[Required]
 		public Job Job { get; set; }
 
 		/// <summary>
-		/// The <see cref="Api.Models.EntityId.Id"/> of <see cref="Job"/>
+		/// The <see cref="EntityId.Id"/> of <see cref="Job"/>.
 		/// </summary>
 		public long JobId { get; set; }
 
 		/// <summary>
-		/// See <see cref="Api.Models.CompileJob.RevisionInformation"/>
+		/// See <see cref="CompileJobResponse.RevisionInformation"/>.
 		/// </summary>
 		[Required]
 		public RevisionInformation RevisionInformation { get; set; }
 
 		/// <summary>
-		/// The <see cref="Version"/> the <see cref="CompileJob"/> was made with in string form
+		/// The <see cref="Version"/> the <see cref="CompileJob"/> was made with in string form.
 		/// </summary>
 		[Required]
 		public string ByondVersion { get; set; }
@@ -44,6 +47,21 @@ namespace Tgstation.Server.Host.Models
 		/// </summary>
 		public int? DMApiPatchVersion { get; set; }
 
+		/// <summary>
+		/// The origin <see cref="Uri"/> of the repository the compile job was built from.
+		/// </summary>
+		public string RepositoryOrigin { get; set; }
+
+		/// <summary>
+		/// The source GitHub repository the deployment came from if any.
+		/// </summary>
+		public long? GitHubRepoId { get; set; }
+
+		/// <summary>
+		/// The GitHub deployment ID associated with the <see cref="CompileJob"/> if any.
+		/// </summary>
+		public int? GitHubDeploymentId { get; set; }
+
 		/// <inheritdoc />
 		public override Version DMApiVersion
 		{
@@ -54,6 +72,7 @@ namespace Tgstation.Server.Host.Models
 
 				return new Version(DMApiMajorVersion.Value, DMApiMinorVersion.Value, DMApiPatchVersion.Value);
 			}
+
 			set
 			{
 				DMApiMajorVersion = value?.Major;
@@ -62,11 +81,8 @@ namespace Tgstation.Server.Host.Models
 			}
 		}
 
-		/// <summary>
-		/// Convert the <see cref="CompileJob"/> to it's API form
-		/// </summary>
-		/// <returns>A new <see cref="Api.Models.CompileJob"/></returns>
-		public Api.Models.CompileJob ToApi() => new Api.Models.CompileJob
+		/// <inheritdoc />
+		public CompileJobResponse ToApi() => new CompileJobResponse
 		{
 			DirectoryName = DirectoryName,
 			DmeName = DmeName,
@@ -76,7 +92,8 @@ namespace Tgstation.Server.Host.Models
 			RevisionInformation = RevisionInformation.ToApi(),
 			ByondVersion = Version.Parse(ByondVersion),
 			MinimumSecurityLevel = MinimumSecurityLevel,
-			DMApiVersion = DMApiVersion
+			DMApiVersion = DMApiVersion,
+			RepositoryOrigin = RepositoryOrigin != null ? new Uri(RepositoryOrigin) : null,
 		};
 	}
 }
