@@ -16,7 +16,9 @@ namespace Tgstation.Server.Host.Extensions.Tests
 
 		class BadConfig1
 		{
+#pragma warning disable IDE0051 // Remove unused private members
 			const string Section = "asdf";
+#pragma warning restore IDE0051 // Remove unused private members
 		}
 
 		class BadConfig2
@@ -35,12 +37,12 @@ namespace Tgstation.Server.Host.Extensions.Tests
 			var serviceCollection = new ServiceCollection();
 			var mockConfig = new Mock<IConfigurationSection>();
 			mockConfig.Setup(x => x.GetSection(It.IsNotNull<string>())).Returns(mockConfig.Object).Verifiable();
-			Assert.ThrowsException<ArgumentNullException>(() => ServiceCollectionExtensions.UseStandardConfig<GoodConfig>(null, null));
-			Assert.ThrowsException<ArgumentNullException>(() => serviceCollection.UseStandardConfig<GoodConfig>(null));
+			Assert.ThrowsExactly<ArgumentNullException>(() => ServiceCollectionExtensions.UseStandardConfig<GoodConfig>(null, null));
+			Assert.ThrowsExactly<ArgumentNullException>(() => serviceCollection.UseStandardConfig<GoodConfig>(null));
 			serviceCollection.UseStandardConfig<GoodConfig>(mockConfig.Object);
-			Assert.ThrowsException<InvalidOperationException>(() => serviceCollection.UseStandardConfig<BadConfig1>(mockConfig.Object));
-			Assert.ThrowsException<InvalidOperationException>(() => serviceCollection.UseStandardConfig<BadConfig2>(mockConfig.Object));
-			Assert.ThrowsException<InvalidOperationException>(() => serviceCollection.UseStandardConfig<BadConfig3>(mockConfig.Object));
+			Assert.ThrowsExactly<InvalidOperationException>(() => serviceCollection.UseStandardConfig<BadConfig1>(mockConfig.Object));
+			Assert.ThrowsExactly<InvalidOperationException>(() => serviceCollection.UseStandardConfig<BadConfig2>(mockConfig.Object));
+			Assert.ThrowsExactly<InvalidOperationException>(() => serviceCollection.UseStandardConfig<BadConfig3>(mockConfig.Object));
 			mockConfig.Verify();
 		}
 	}

@@ -1,0 +1,27 @@
+mutation SetUserOAuthConnections($id: ID!, $newOAuthConnections: [OAuthConnectionInput!]!) {
+  updateUser(
+    input: { id: $id, newOAuthConnections: $newOAuthConnections }
+  ) {
+    updatedUser {
+        user {
+          canonicalName
+          createdAt
+          enabled
+          id
+          name
+          systemIdentifier
+          oAuthConnections {
+            externalUserId
+            provider
+          }
+        }
+    }
+    errors {
+      ... on ErrorMessageError {
+        additionalData
+        errorCode
+        message
+      }
+    }
+  }
+}

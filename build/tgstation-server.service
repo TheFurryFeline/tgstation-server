@@ -1,0 +1,26 @@
+[Unit]
+Description=tgstation-server
+Wants=network-online.target
+After=network-online.target
+After=mysql.service
+After=mariadb.service
+After=postgresql.service
+After=mssql-server.service
+
+[Service]
+User=tgstation-server
+Type=notify-reload
+NotifyAccess=all
+WorkingDirectory=/opt/tgstation-server
+ExecStart=/usr/bin/dotnet Tgstation.Server.Host.Console.dll --appsettings-base-path=/etc/tgstation-server --General:SetupWizardMode=Never
+TimeoutStartSec=600
+Restart=always
+KillMode=process
+ReloadSignal=SIGUSR2
+RestartKillSignal=SIGUSR2
+AmbientCapabilities=CAP_SYS_NICE CAP_SYS_PTRACE
+WatchdogSec=60
+WatchdogSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target

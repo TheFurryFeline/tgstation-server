@@ -1,18 +1,18 @@
 ﻿using System;
+
 using Microsoft.EntityFrameworkCore.Migrations;
 
 namespace Tgstation.Server.Host.Database.Migrations
 {
 	/// <summary>
-	/// Cleans up of nullable columns and foreign keys MSSQL
+	/// Cleans up of nullable columns and foreign keys MSSQL.
 	/// </summary>
 	public partial class MSNullableAndForeignKeyCleanup : Migration
 	{
 		/// <inheritdoc />
 		protected override void Up(MigrationBuilder migrationBuilder)
 		{
-			if (migrationBuilder == null)
-				throw new ArgumentNullException(nameof(migrationBuilder));
+			ArgumentNullException.ThrowIfNull(migrationBuilder);
 
 			migrationBuilder.DropForeignKey(
 				name: "FK_Instances_WatchdogReattachInformations_WatchdogReattachInformationId",
@@ -117,8 +117,7 @@ namespace Tgstation.Server.Host.Database.Migrations
 		/// <inheritdoc />
 		protected override void Down(MigrationBuilder migrationBuilder)
 		{
-			if (migrationBuilder == null)
-				throw new ArgumentNullException(nameof(migrationBuilder));
+			ArgumentNullException.ThrowIfNull(migrationBuilder);
 
 			migrationBuilder.DropForeignKey(
 				name: "FK_TestMerges_RevisionInformations_PrimaryRevisionInformationId",

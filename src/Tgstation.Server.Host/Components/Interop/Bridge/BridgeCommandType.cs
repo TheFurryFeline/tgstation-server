@@ -8,7 +8,7 @@
 		/// <summary>
 		/// DreamDaemon notifying us of its current port and requesting a change if necessary.
 		/// </summary>
-		PortUpdate,
+		DeprecatedPortUpdate,
 
 		/// <summary>
 		/// DreamDaemon notifying it is starting.
@@ -16,7 +16,7 @@
 		Startup,
 
 		/// <summary>
-		/// DreamDaemon notifying the server is primed
+		/// DreamDaemon notifying the server is primed.
 		/// </summary>
 		Prime,
 
@@ -33,6 +33,21 @@
 		/// <summary>
 		/// DreamDaemon requesting a <see cref="ChatMessage"/> be sent.
 		/// </summary>
-		ChatSend
+		ChatSend,
+
+		/// <summary>
+		/// DreamDaemon attempting to send a longer bridge message.
+		/// </summary>
+		Chunk,
+
+		/// <summary>
+		/// DreamDaemon requesting a custom event to be triggered.
+		/// </summary>
+		Event,
+
+		/// <summary>
+		/// DreamDaemon requesting TGS trigger a deployment.
+		/// </summary>
+		Deploy,
 	}
 }

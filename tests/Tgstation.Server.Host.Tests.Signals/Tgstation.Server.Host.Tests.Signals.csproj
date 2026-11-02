@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TgsTestNoSdk>true</TgsTestNoSdk>
+  </PropertyGroup>
+
+  <Import Project="../../build/TestCommon.props" />
+
+  <PropertyGroup>
+    <TargetFramework>$(TgsFrameworkVersion)</TargetFramework>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Tgstation.Server.Host\Tgstation.Server.Host.csproj" />
+  </ItemGroup>
+
+</Project>

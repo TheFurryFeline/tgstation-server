@@ -1,32 +1,30 @@
 ﻿using System.ComponentModel.DataAnnotations;
-using Tgstation.Server.Api.Models;
+
+using Tgstation.Server.Api.Models.Response;
 
 namespace Tgstation.Server.Host.Models
 {
-	/// <inheritdoc />
-	public sealed class RepositorySettings : Api.Models.Internal.RepositorySettings
+	/// <inheritdoc cref="Api.Models.RepositorySettings" />
+	public sealed class RepositorySettings : Api.Models.RepositorySettings, ILegacyApiTransformable<RepositoryResponse>
 	{
 		/// <summary>
-		/// The row Id
+		/// The row Id.
 		/// </summary>
 		public long Id { get; set; }
 
 		/// <summary>
-		/// The instance <see cref="EntityId.Id"/>
+		/// The instance <see cref="Api.Models.EntityId.Id"/>.
 		/// </summary>
 		public long InstanceId { get; set; }
 
 		/// <summary>
-		/// The parent <see cref="Models.Instance"/>
+		/// The parent <see cref="Models.Instance"/>.
 		/// </summary>
 		[Required]
-		public Instance Instance { get; set; }
+		public Instance? Instance { get; set; }
 
-		/// <summary>
-		/// Convert the <see cref="Repository"/> to it's API form
-		/// </summary>
-		/// <returns>A new <see cref="Repository"/></returns>
-		public Repository ToApi() => new Repository
+		/// <inheritdoc />
+		public RepositoryResponse ToApi() => new()
 		{
 			// AccessToken = AccessToken, // never show this
 			AccessUser = AccessUser,
@@ -36,7 +34,9 @@ namespace Tgstation.Server.Host.Models
 			CommitterName = CommitterName,
 			PushTestMergeCommits = PushTestMergeCommits,
 			ShowTestMergeCommitters = ShowTestMergeCommitters,
-			PostTestMergeComment = PostTestMergeComment
+			PostTestMergeComment = PostTestMergeComment,
+			CreateGitHubDeployments = CreateGitHubDeployments,
+			UpdateSubmodules = UpdateSubmodules,
 
 			// revision information and the rest retrieved by controller
 		};

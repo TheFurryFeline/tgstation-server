@@ -1,29 +1,59 @@
-﻿using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging;
-using System;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Security.Claims;
 using System.Threading;
 using System.Threading.Tasks;
+
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.JsonWebTokens;
+
+using Tgstation.Server.Api;
+using Tgstation.Server.Api.Rights;
+using Tgstation.Server.Host.Configuration;
 using Tgstation.Server.Host.Database;
+using Tgstation.Server.Host.Extensions;
 using Tgstation.Server.Host.Models;
+using Tgstation.Server.Host.Utils;
 
 namespace Tgstation.Server.Host.Security
 {
-	/// <inheritdoc />
-	sealed class AuthenticationContextFactory : IAuthenticationContextFactory, IDisposable
+	/// <inheritdoc cref="IAuthenticationContext" />
+	sealed class AuthenticationContextFactory : ITokenValidator, IDisposable
 	{
-		/// <inheritdoc />
-		public IAuthenticationContext CurrentAuthenticationContext { get; private set; }
+		/// <summary>
+		/// Internal scheme prefix for OIDC schemes.
+		/// </summary>
+		public const string OpenIDConnectAuthenticationSchemePrefix = $"{OpenIdConnectDefaults.AuthenticationScheme}.";
 
 		/// <summary>
-		/// The <see cref="IDatabaseContext"/> for the <see cref="AuthenticationContextFactory"/>
+		/// The <see cref="IAuthenticationContext"/> the <see cref="AuthenticationContextFactory"/> created.
+		/// </summary>
+		public IAuthenticationContext CurrentAuthenticationContext => currentAuthenticationContext;
+
+		/// <summary>
+		/// The <see cref="IDatabaseContext"/> for the <see cref="AuthenticationContextFactory"/>.
 		/// </summary>
 		readonly IDatabaseContext databaseContext;
 
 		/// <summary>
-		/// The <see cref="IIdentityCache"/> for the <see cref="AuthenticationContextFactory"/>
+		/// The <see cref="IIdentityCache"/> for the <see cref="AuthenticationContextFactory"/>.
 		/// </summary>
 		readonly IIdentityCache identityCache;
+
+		/// <summary>
+		/// The <see cref="IOptions{TOptions}"/> of <see cref="SwarmConfiguration"/> for the <see cref="AuthenticationContextFactory"/>.
+		/// </summary>
+		readonly IOptions<SwarmConfiguration> swarmConfigurationOptions;
+
+		/// <summary>
+		/// The <see cref="IOptionsSnapshot{TOptions}"/> of <see cref="SecurityConfiguration"/> for the <see cref="AuthenticationContextFactory"/>.
+		/// </summary>
+		readonly IOptionsSnapshot<SecurityConfiguration> securityConfigurationOptions;
 
 		/// <summary>
 		/// The <see cref="ILogger"/> for the <see cref="AuthenticationContextFactory"/>.
@@ -31,82 +61,290 @@ namespace Tgstation.Server.Host.Security
 		readonly ILogger<AuthenticationContextFactory> logger;
 
 		/// <summary>
-		/// Construct an <see cref="AuthenticationContextFactory"/>
+		/// Backing field for <see cref="CurrentAuthenticationContext"/>.
 		/// </summary>
-		/// <param name="databaseContext">The value of <see cref="databaseContext"/></param>
-		/// <param name="identityCache">The value of <see cref="identityCache"/></param>
+		readonly AuthenticationContext currentAuthenticationContext;
+
+		/// <summary>
+		/// The <see cref="ApiHeaders"/> for the <see cref="AuthenticationContextFactory"/>.
+		/// </summary>
+		readonly ApiHeaders? apiHeaders;
+
+		/// <summary>
+		/// 1 if <see cref="currentAuthenticationContext"/> was initialized, 0 otherwise.
+		/// </summary>
+		int initialized;
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="AuthenticationContextFactory"/> class.
+		/// </summary>
+		/// <param name="databaseContext">The value of <see cref="databaseContext"/>.</param>
+		/// <param name="identityCache">The value of <see cref="identityCache"/>.</param>
+		/// <param name="apiHeadersProvider">The <see cref="IApiHeadersProvider"/> containing the value of <see cref="apiHeaders"/>.</param>
+		/// <param name="swarmConfigurationOptions">The value of <see cref="swarmConfigurationOptions"/>.</param>
+		/// <param name="securityConfigurationOptions">The value of <see cref="securityConfigurationOptions"/>.</param>
 		/// <param name="logger">The value of <see cref="logger"/>.</param>
 		public AuthenticationContextFactory(
 			IDatabaseContext databaseContext,
 			IIdentityCache identityCache,
+			IApiHeadersProvider apiHeadersProvider,
+			IOptions<SwarmConfiguration> swarmConfigurationOptions,
+			IOptionsSnapshot<SecurityConfiguration> securityConfigurationOptions,
 			ILogger<AuthenticationContextFactory> logger)
 		{
 			this.databaseContext = databaseContext ?? throw new ArgumentNullException(nameof(databaseContext));
 			this.identityCache = identityCache ?? throw new ArgumentNullException(nameof(identityCache));
+			ArgumentNullException.ThrowIfNull(apiHeadersProvider);
+
+			apiHeaders = apiHeadersProvider.ApiHeaders;
+			this.swarmConfigurationOptions = swarmConfigurationOptions ?? throw new ArgumentNullException(nameof(swarmConfigurationOptions));
+			this.securityConfigurationOptions = securityConfigurationOptions ?? throw new ArgumentNullException(nameof(securityConfigurationOptions));
+
 			this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
+
+			currentAuthenticationContext = new AuthenticationContext();
 		}
 
 		/// <inheritdoc />
-		public void Dispose() => CurrentAuthenticationContext?.Dispose();
+		public void Dispose() => currentAuthenticationContext.Dispose();
 
 		/// <inheritdoc />
-		public async Task CreateAuthenticationContext(long userId, long? instanceId, DateTimeOffset validAfter, CancellationToken cancellationToken)
+#pragma warning disable CA1506 // TODO: Decomplexify
+		public async Task ValidateTgsToken(Microsoft.AspNetCore.Authentication.JwtBearer.TokenValidatedContext tokenValidatedContext, CancellationToken cancellationToken)
+#pragma warning restore CA1506
 		{
-			if (CurrentAuthenticationContext != null)
+			ArgumentNullException.ThrowIfNull(tokenValidatedContext);
+
+			if (tokenValidatedContext.SecurityToken is not JsonWebToken jwt)
+				throw new ArgumentException($"Expected {nameof(tokenValidatedContext)} to contain a {nameof(JsonWebToken)}!", nameof(tokenValidatedContext));
+
+			if (Interlocked.Exchange(ref initialized, 1) != 0)
 				throw new InvalidOperationException("Authentication context has already been loaded");
+
+			var principal = new ClaimsPrincipal(new ClaimsIdentity(jwt.Claims));
+			var userId = principal.GetTgsUserId();
+
+			var notBefore = principal.ParseTime(JwtRegisteredClaimNames.Nbf);
+			var expires = principal.ParseTime(JwtRegisteredClaimNames.Exp);
 
 			var user = await databaseContext
 				.Users
-				.AsQueryable()
 				.Where(x => x.Id == userId)
 				.Include(x => x.CreatedBy)
-				.FirstOrDefaultAsync(cancellationToken)
-				.ConfigureAwait(false);
+				.Include(x => x.PermissionSet)
+				.Include(x => x.Group)
+					.ThenInclude(x => x!.PermissionSet)
+				.Include(x => x.OAuthConnections)
+				.Include(x => x.OidcConnections)
+				.FirstOrDefaultAsync(cancellationToken);
 			if (user == default)
 			{
-				logger.LogWarning("Unable to find user with ID {0}!", userId);
-				CurrentAuthenticationContext = new AuthenticationContext();
+				tokenValidatedContext.Fail($"Unable to find user with ID {userId}!");
 				return;
 			}
 
-			ISystemIdentity systemIdentity;
+			ISystemIdentity? systemIdentity;
 			if (user.SystemIdentifier != null)
 				systemIdentity = identityCache.LoadCachedIdentity(user);
 			else
 			{
-				if (user.LastPasswordUpdate.HasValue && user.LastPasswordUpdate > validAfter)
+				if (user.LastPasswordUpdate.HasValue && user.LastPasswordUpdate >= notBefore)
 				{
-					logger.LogDebug("Rejecting token for user {0} created before last password update: {1}", userId, user.LastPasswordUpdate.Value);
-					CurrentAuthenticationContext = new AuthenticationContext();
+					tokenValidatedContext.Fail($"Rejecting token for user {userId} created before last modification: {user.LastPasswordUpdate.Value}");
 					return;
 				}
 
 				systemIdentity = null;
 			}
 
+			var userPermissionSet = user.PermissionSet ?? user.Group!.PermissionSet;
 			try
 			{
-				InstanceUser instanceUser = null;
+				InstancePermissionSet? instancePermissionSet = null;
+				var instanceId = apiHeaders?.InstanceId;
 				if (instanceId.HasValue)
 				{
-					instanceUser = await databaseContext.InstanceUsers
-						.AsQueryable()
-						.Where(x => x.UserId == userId && x.InstanceId == instanceId)
+					instancePermissionSet = await databaseContext
+						.InstancePermissionSets
+						.Where(x => x.PermissionSetId == userPermissionSet!.Id && x.InstanceId == instanceId && x.Instance!.SwarmIdentifer == swarmConfigurationOptions.Value.Identifier)
 						.Include(x => x.Instance)
-						.FirstOrDefaultAsync(cancellationToken)
-						.ConfigureAwait(false);
+						.FirstOrDefaultAsync(cancellationToken);
 
-					if (instanceUser == null)
-						logger.LogDebug("User {0} does not have permissions on instance {1}!", userId, instanceId.Value);
+					if (instancePermissionSet == null)
+						logger.LogDebug("User {userId} does not have permissions on instance {instanceId}!", userId, instanceId.Value);
 				}
 
-				CurrentAuthenticationContext = new AuthenticationContext(systemIdentity, user, instanceUser);
+				currentAuthenticationContext.Initialize(
+					user,
+					expires,
+					jwt.EncodedSignature, // signature is enough to uniquely identify the session as it is composite of all the inputs
+					instancePermissionSet,
+					systemIdentity);
 			}
 			catch
 			{
 				systemIdentity?.Dispose();
 				throw;
 			}
+		}
+
+		/// <inheritdoc />
+#pragma warning disable CA1506 // TODO: Decomplexify
+		public async Task ValidateOidcToken(RemoteAuthenticationContext<OpenIdConnectOptions> tokenValidatedContext, string schemeKey, string groupIdClaimName, CancellationToken cancellationToken)
+#pragma warning restore CA1506
+		{
+			ArgumentNullException.ThrowIfNull(tokenValidatedContext);
+
+			var principal = tokenValidatedContext.Principal;
+			if (principal == null)
+				throw new InvalidOperationException("Expected a valid principal here!");
+
+			var userIdClaim = principal.FindFirst(JwtRegisteredClaimNames.Sub);
+			if (userIdClaim == default)
+				throw new InvalidOperationException($"Missing '{JwtRegisteredClaimNames.Sub}' claim!");
+
+			var userId = userIdClaim.Value;
+			var scheme = tokenValidatedContext.Scheme.Name;
+			var deprefixedScheme = scheme.Substring(OpenIDConnectAuthenticationSchemePrefix.Length);
+			var connection = await databaseContext
+				.OidcConnections
+				.Where(oidcConnection => oidcConnection.ExternalUserId == userId && oidcConnection.SchemeKey == deprefixedScheme)
+				.Include(oidcConnection => oidcConnection.User)
+					.ThenInclude(user => user!.Group)
+						.ThenInclude(group => group!.PermissionSet)
+				.Include(oidcConnection => oidcConnection.User)
+					.ThenInclude(user => user!.PermissionSet)
+				.FirstOrDefaultAsync(cancellationToken);
+
+			User user;
+			if (!securityConfigurationOptions.Value.OidcStrictMode)
+			{
+				if (connection == default)
+				{
+					tokenValidatedContext.Fail($"Unable to find user with OidcConnection for {deprefixedScheme}/{userId}!");
+					return;
+				}
+
+				user = connection.User!;
+			}
+			else
+			{
+				var groupClaim = principal.FindFirst(groupIdClaimName);
+				long? groupId;
+				if (groupClaim == default)
+					groupId = null;
+				else if (Int64.TryParse(groupClaim.Value, out long groupIdParsed))
+					groupId = groupIdParsed;
+				else
+				{
+					tokenValidatedContext.Fail($"User has non-numeric '{groupIdClaimName}' claim!");
+					return;
+				}
+
+				UserGroup? group = groupId.HasValue
+					? await databaseContext
+						.Groups
+						.Where(group => group.Id == groupId.Value)
+						.Include(group => group.PermissionSet)
+						.FirstOrDefaultAsync(cancellationToken)
+					: null;
+
+				var missingClaimError = $"User missing '{groupIdClaimName}' claim!";
+				if (connection == default)
+				{
+					var username = principal.Identity?.Name;
+					if (username == null)
+					{
+						tokenValidatedContext.Fail("Failed to retrieve user's name from retrieved claims!");
+						return;
+					}
+
+					if (username.Contains(':', StringComparison.Ordinal))
+					{
+						tokenValidatedContext.Fail("Cannot create users with the ':' in their name!");
+						return;
+					}
+
+					if (group == null)
+					{
+						tokenValidatedContext.Fail(
+							groupId.HasValue
+								? $"'{groupIdClaimName}' does not point to a valid group!"
+								: missingClaimError);
+						return;
+					}
+
+					logger.LogInformation("Registering new user '{name}' via OIDC scheme '{scheme}'", username, schemeKey);
+
+					var tgsUser = await databaseContext
+						.Users
+						.GetTgsUser(
+							dbUser => new User
+							{
+								Id = dbUser.Id!.Value,
+							},
+							cancellationToken);
+
+					user = new User
+					{
+						CreatedAt = DateTimeOffset.UtcNow,
+						CanonicalName = User.CanonicalizeName(username),
+						Name = username,
+						CreatedById = tgsUser.Id,
+						Enabled = true,
+						GroupId = group.Id,
+						OidcConnections = new List<OidcConnection>
+						{
+							new()
+							{
+								SchemeKey = schemeKey,
+								ExternalUserId = userId,
+							},
+						},
+						PasswordHash = "_", // This can't be hashed
+					};
+
+					databaseContext.Users.Add(user);
+				}
+				else
+				{
+					user = connection.User!;
+
+					// group update
+					if (group == null)
+					{
+						logger.LogDebug("User {id} attempted to login via OIDC scheme '{scheme}' but had no group ID claim ('{groupClaimName}') and will be disabled", user.Id, schemeKey, groupIdClaimName);
+						user.PermissionSet = new PermissionSet
+						{
+							AdministrationRights = AdministrationRights.None,
+							InstanceManagerRights = InstanceManagerRights.None,
+						};
+						user.GroupId = null;
+						user.Enabled = false;
+
+						tokenValidatedContext.Fail(missingClaimError);
+						return;
+					}
+
+					logger.LogDebug("User {id} mapped to group {groupId} via OIDC login on scheme '{scheme}'", user.Id, groupId, schemeKey);
+					user.Group = group;
+					if (user.PermissionSet != null)
+						databaseContext.PermissionSets.Remove(user.PermissionSet);
+
+					user.Enabled = true;
+				}
+
+				await databaseContext.Save(cancellationToken);
+			}
+
+			var expires = principal.ParseTime(JwtRegisteredClaimNames.Exp);
+
+			currentAuthenticationContext.Initialize(
+				user,
+				expires,
+				Guid.NewGuid().ToString(),
+				null,
+				null);
 		}
 	}
 }

@@ -11,17 +11,18 @@ namespace Tgstation.Server.Host.Jobs.Tests
 		Task currentWaitTask;
 		bool cancelled;
 
-		async Task TestJob(CancellationToken cancellationToken)
+		async Task<bool> TestJob(CancellationToken cancellationToken)
 		{
-			await currentWaitTask.ConfigureAwait(false);
+			await currentWaitTask;
 			cancelled = cancellationToken.IsCancellationRequested;
+			return true;
 		}
 
 		[TestMethod]
 		public void TestConstructionAndDisposal()
 		{
 			cancelled = false;
-			Assert.ThrowsException<ArgumentNullException>(() => new JobHandler(null));
+			Assert.ThrowsExactly<ArgumentNullException>(() => new JobHandler(null));
 
 			currentWaitTask = Task.CompletedTask;
 			new JobHandler(TestJob).Dispose();
@@ -35,15 +36,15 @@ namespace Tgstation.Server.Host.Jobs.Tests
 			//test with a cancelled cts
 			using (var cts = new CancellationTokenSource())
 			{
-				var tcs = new TaskCompletionSource<object>();
+				var tcs = new TaskCompletionSource();
 				currentWaitTask = tcs.Task;
 				cts.Cancel();
 				using var handler = new JobHandler(TestJob);
-				await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => handler.Wait(cts.Token)).ConfigureAwait(false);
+				await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => handler.Wait(cts.Token));
 				handler.Start();
-				await Assert.ThrowsExceptionAsync<OperationCanceledException>(() => handler.Wait(cts.Token)).ConfigureAwait(false);
-				tcs.SetResult(null);
-				await handler.Wait(default).ConfigureAwait(false);
+				await Assert.ThrowsExactlyAsync<TaskCanceledException>(() => handler.Wait(cts.Token));
+				tcs.SetResult();
+				await handler.Wait(default);
 			}
 			Assert.IsFalse(cancelled);
 		}
@@ -65,15 +66,15 @@ namespace Tgstation.Server.Host.Jobs.Tests
 		[TestMethod]
 		public async Task TestCancellation()
 		{
-			var tcs = new TaskCompletionSource<object>();
+			var tcs = new TaskCompletionSource();
 			currentWaitTask = tcs.Task;
 			cancelled = false;
-			using(var handler = new JobHandler(TestJob))
+			using (var handler = new JobHandler(TestJob))
 			{
 				handler.Start();
 				handler.Cancel();
-				tcs.SetResult(null);
-				await handler.Wait(default).ConfigureAwait(false);
+				tcs.SetResult();
+				await handler.Wait(default);
 			}
 			Assert.IsTrue(cancelled);
 		}

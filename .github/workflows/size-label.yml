@@ -1,0 +1,27 @@
+name: Size Labelling
+on:
+  pull_request_target:
+    types:
+      - opened
+      - synchronize
+
+concurrency:
+  group: "size-labelling-${{ github.head_ref || github.run_id }}-${{ github.event_name }}"
+  cancel-in-progress: true
+
+jobs:
+  size-label:
+    name: Add Size Label
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate App Token
+        id: app-token-generation
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Run Labeller
+        uses: pascalgn/size-label-action@f8edde36b3be04b4f65dcfead05dc8691b374348
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token-generation.outputs.token }}

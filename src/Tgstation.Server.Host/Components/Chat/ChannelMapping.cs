@@ -1,12 +1,14 @@
-﻿namespace Tgstation.Server.Host.Components.Chat
+﻿using System;
+
+namespace Tgstation.Server.Host.Components.Chat
 {
 	/// <summary>
-	/// Represents a mapping of a <see cref="ChannelRepresentation.RealId"/>
+	/// Represents a mapping of a <see cref="ChannelRepresentation.RealId"/>.
 	/// </summary>
 	sealed class ChannelMapping
 	{
 		/// <summary>
-		/// The Id of the <see cref="Providers.IProvider"/>
+		/// The Id of the <see cref="Providers.IProvider"/>.
 		/// </summary>
 		public long ProviderId { get; set; }
 
@@ -16,12 +18,12 @@
 		public ulong ProviderChannelId { get; set; }
 
 		/// <summary>
-		/// If <see cref="Channel"/> is a watchdog channel
+		/// If <see cref="Channel"/> is a watchdog channel.
 		/// </summary>
 		public bool IsWatchdogChannel { get; set; }
 
 		/// <summary>
-		/// If the <see cref="Channel"/> is an updates channel
+		/// If the <see cref="Channel"/> is an updates channel.
 		/// </summary>
 		public bool IsUpdatesChannel { get; set; }
 
@@ -31,8 +33,22 @@
 		public bool IsAdminChannel { get; set; }
 
 		/// <summary>
+		/// If the <see cref="Channel"/> is a system messages channel.
+		/// </summary>
+		public bool IsSystemChannel { get; set; }
+
+		/// <summary>
 		/// The <see cref="ChannelRepresentation"/> with the mapped Id.
 		/// </summary>
-		public ChannelRepresentation Channel { get; set; }
+		public ChannelRepresentation Channel { get; }
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="ChannelMapping"/> class.
+		/// </summary>
+		/// <param name="channel">The value of <see cref="Channel"/>.</param>
+		public ChannelMapping(ChannelRepresentation channel)
+		{
+			Channel = channel ?? throw new ArgumentNullException(nameof(channel));
+		}
 	}
 }

@@ -1,0 +1,46 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="../../build/SrcCommon.props" />
+
+  <PropertyGroup>
+    <TargetFrameworks>$(TgsFrameworkVersion)</TargetFrameworks>
+    <Version>$(TgsCoreVersion)</Version>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <Target Name="CleanApollo" AfterTargets="Clean">
+    <RemoveDir Directories="node_modules" />
+    <RemoveDir Directories=".yarn" />
+  </Target>
+
+  <Target Name="GetApi" Outputs="../../artifacts/gitlab-api.graphql" Condition="!Exists('../../artifacts/gitlab-api.graphql')">
+    <Message Text="Fetching GitLab GraphQL API schema..." Importance="high" />
+    <MakeDir Directories="../../artifacts" />
+    <Exec Command="dotnet tool restore" />
+    <Exec Command="dotnet graphql download -f ../../artifacts/gitlab-api.graphql https://gitlab.com/api/graphql" />
+  </Target>
+
+  <!-- https://github.com/ChilliCream/graphql-platform/blob/c0c8df525ca0f47bf3b3b409a8b22cbe37f7a9c0/src/StrawberryShake/MetaPackages/Common/MSBuild/StrawberryShake.targets#L20 -->
+  <Target Name="ImportGraphQLApiSchema" DependsOnTargets="GetApi" BeforeTargets="_GraphQLCodeGenerationRoot" Inputs="../../artifacts/gitlab-api.graphql" Outputs="schema.graphql">
+    <Copy SkipUnchangedFiles="true" SourceFiles="../../artifacts/gitlab-api.graphql" DestinationFiles="schema.graphql" />
+  </Target>
+
+  <!-- This should be able to be removed with ChilliCream v16+ -->
+  <Target Name="FixWarningsInGeneratedSchema" AfterTargets="GenerateGraphQLCode">
+    <PropertyGroup>
+      <InputFile>$(IntermediateOutputPath)berry/GraphQLClient.Client.cs</InputFile>
+      <OutputFile>$(IntermediateOutputPath)berry/GraphQLClient.Client.cs</OutputFile>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(OutputFile)" Lines="$([System.IO.File]::ReadAllText($(InputFile)).Replace('/ &lt;auto-generated/&gt;','/ &lt;auto-generated /&gt;%0d%0a#pragma warning disable'))" Overwrite="true" Encoding="Unicode" />
+  </Target>
+
+  <ItemGroup>
+    <!-- GraphQL code generator -->
+    <PackageReference Include="StrawberryShake.Server" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="GQL\Queries\" />
+    <Folder Include="GQL\Mutations\" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="../../build/NugetCommon.props" />
+
+  <PropertyGroup>
+    <TargetFrameworks>$(TgsNugetNetFramework)</TargetFrameworks>
+    <Version>$(TgsCommonLibraryVersion)</Version>
+    <Nullable>enable</Nullable>
+    <Description>Common functions for tgstation-server.</Description>
+    <PackageTags>web tgstation-server tgstation ss13 byond client http</PackageTags>
+    <PackageReleaseNotes>$(TGS_NUGET_RELEASE_NOTES_COMMON)</PackageReleaseNotes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Usage: ValueTask netstandard backport  -->
+    <PackageReference Include="System.Threading.Tasks.Extensions" />
+  </ItemGroup>
+
+  <Target Name="IconGeneration" BeforeTargets="ResolveAssemblyReferences" Condition="'$(TGS_NIX_BUILD)' == ''" Inputs="../../build/logo.svg" Outputs="../../artifacts/tgs.ico;../../artifacts/tgs.png;../../tools/Tgstation.Server.LogoGenerator/Program.cs">
+    <Message Text="Generating icons from SVG..." Importance="high" />
+    <Exec Command="dotnet run --project tools/Tgstation.Server.LogoGenerator -c $(Configuration)" WorkingDirectory="../.." />
+  </Target>
+
+  <Target Name="IconClean" AfterTargets="Clean">
+    <Message Text="Cleaning icons..." Importance="high" />
+    <Delete Files="../../artifacts/tgs.ico;../../artifacts/tgs.png" />
+  </Target>
+</Project>

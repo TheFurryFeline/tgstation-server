@@ -1,5 +1,6 @@
-﻿using Microsoft.Extensions.Logging;
-using System;
+﻿using System;
+
+using Microsoft.Extensions.Logging;
 
 namespace Tgstation.Server.Host.Watchdog
 {
@@ -7,6 +8,10 @@ namespace Tgstation.Server.Host.Watchdog
 	public sealed class WatchdogFactory : IWatchdogFactory
 	{
 		/// <inheritdoc />
-		public IWatchdog CreateWatchdog(ILoggerFactory loggerFactory) => new Watchdog(loggerFactory?.CreateLogger<Watchdog>() ?? throw new ArgumentNullException(nameof(loggerFactory)));
+		public IWatchdog CreateWatchdog(
+			ISignalChecker signalChecker,
+			ILoggerFactory loggerFactory) => new Watchdog(
+				signalChecker ?? throw new ArgumentNullException(nameof(signalChecker)),
+				loggerFactory?.CreateLogger<Watchdog>() ?? throw new ArgumentNullException(nameof(loggerFactory)));
 	}
 }

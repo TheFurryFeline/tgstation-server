@@ -3,14 +3,16 @@ using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+
 using Tgstation.Server.Api.Models;
+using Tgstation.Server.Host.Components.Interop;
 using Tgstation.Server.Host.Components.Repository;
 using Tgstation.Server.Host.Components.Watchdog;
 
 namespace Tgstation.Server.Host.Components.Chat.Commands
 {
 	/// <summary>
-	/// For displaying <see cref="Api.Models.Internal.RevisionInformation"/>
+	/// For displaying <see cref="Api.Models.Internal.RevisionInformation"/>.
 	/// </summary>
 	sealed class RevisionCommand : ICommand
 	{
@@ -18,26 +20,26 @@ namespace Tgstation.Server.Host.Components.Chat.Commands
 		public string Name => "revision";
 
 		/// <inheritdoc />
-		public string HelpText => "Display live commit sha. Add --repo to view repository revision";
+		public string HelpText => "Display live origin commit sha. Add --repo to view repository revision";
 
 		/// <inheritdoc />
 		public bool AdminOnly => false;
 
 		/// <summary>
-		/// The <see cref="IWatchdog"/> for the <see cref="PullRequestsCommand"/>
+		/// The <see cref="IWatchdog"/> for the <see cref="PullRequestsCommand"/>.
 		/// </summary>
 		readonly IWatchdog watchdog;
 
 		/// <summary>
-		/// The <see cref="IRepositoryManager"/> for the <see cref="PullRequestsCommand"/>
+		/// The <see cref="IRepositoryManager"/> for the <see cref="PullRequestsCommand"/>.
 		/// </summary>
 		readonly IRepositoryManager repositoryManager;
 
 		/// <summary>
-		/// Construct a <see cref="RevisionCommand"/>
+		/// Initializes a new instance of the <see cref="RevisionCommand"/> class.
 		/// </summary>
-		/// <param name="watchdog">The value of <see cref="watchdog"/></param>
-		/// <param name="repositoryManager">The value of <see cref="repositoryManager"/></param>
+		/// <param name="watchdog">The value of <see cref="watchdog"/>.</param>
+		/// <param name="repositoryManager">The value of <see cref="repositoryManager"/>.</param>
 		public RevisionCommand(IWatchdog watchdog, IRepositoryManager repositoryManager)
 		{
 			this.watchdog = watchdog ?? throw new ArgumentNullException(nameof(watchdog));
@@ -45,24 +47,39 @@ namespace Tgstation.Server.Host.Components.Chat.Commands
 		}
 
 		/// <inheritdoc />
-		public async Task<string> Invoke(string arguments, ChatUser user, CancellationToken cancellationToken)
+		public async ValueTask<MessageContent> Invoke(string arguments, ChatUser user, CancellationToken cancellationToken)
 		{
 			string result;
-			if (arguments.Split(' ').Any(x => x.ToUpperInvariant() == "--REPO"))
-				using (var repo = await repositoryManager.LoadRepository(cancellationToken).ConfigureAwait(false))
-				{
-					if (repo == null)
-						return "Repository unavailable!";
-					result = repo.Head;
-				}
+			if (arguments.Split(' ').Any(x => x.Equals("--repo", StringComparison.OrdinalIgnoreCase)))
+			{
+				if (repositoryManager.CloneInProgress || repositoryManager.InUse)
+					return new MessageContent
+					{
+						Text = "Repository busy! Try again later",
+					};
+
+				using var repo = await repositoryManager.LoadRepository(cancellationToken);
+				if (repo == null)
+					return new MessageContent
+					{
+						Text = "Repository unavailable!",
+					};
+				result = repo.Head;
+			}
 			else
 			{
 				if (watchdog.Status == WatchdogStatus.Offline)
-					return "Server offline!";
-				result = watchdog.ActiveCompileJob?.RevisionInformation.CommitSha;
+					return new MessageContent
+					{
+						Text = "Server offline!",
+					};
+				result = watchdog.ActiveCompileJob?.RevisionInformation.OriginCommitSha!;
 			}
 
-			return String.Format(CultureInfo.InvariantCulture, "^{0}", result);
+			return new MessageContent
+			{
+				Text = String.Format(CultureInfo.InvariantCulture, "^{0}", result),
+			};
 		}
 	}
 }

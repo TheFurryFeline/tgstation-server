@@ -1,47 +1,81 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
+
 using Tgstation.Server.Api;
-using Tgstation.Server.Api.Models;
+using Tgstation.Server.Api.Models.Request;
+using Tgstation.Server.Api.Models.Response;
 
 namespace Tgstation.Server.Client
 {
-	/// <inheritdoc />
-	sealed class AdministrationClient : IAdministrationClient
+	/// <inheritdoc cref="IAdministrationClient" />
+	sealed class AdministrationClient : PaginatedClient, IAdministrationClient
 	{
 		/// <summary>
-		/// The <see cref="apiClient"/> for the <see cref="AdministrationClient"/>
+		/// Initializes a new instance of the <see cref="AdministrationClient"/> class.
 		/// </summary>
-		readonly IApiClient apiClient;
-
-		/// <summary>
-		/// Construct an <see cref="AdministrationClient"/>
-		/// </summary>
-		/// <param name="apiClient">The value of <see cref="apiClient"/></param>
+		/// <param name="apiClient">The <see cref="IApiClient"/> for the <see cref="PaginatedClient"/>.</param>
 		public AdministrationClient(IApiClient apiClient)
+			: base(apiClient)
 		{
-			this.apiClient = apiClient;
 		}
 
 		/// <inheritdoc />
-		public Task<Administration> Read(CancellationToken cancellationToken) => apiClient.Read<Administration>(Routes.Administration, cancellationToken);
+		public ValueTask<AdministrationResponse> Read(bool forceFresh, CancellationToken cancellationToken) => ApiClient.Read<AdministrationResponse>($"{Routes.Administration}?fresh={forceFresh}", cancellationToken);
 
 		/// <inheritdoc />
-		public Task Update(Administration administration, CancellationToken cancellationToken) => apiClient.Update(Routes.Administration, administration ?? throw new ArgumentNullException(nameof(administration)), cancellationToken);
+		public async ValueTask<ServerUpdateResponse> Update(
+			ServerUpdateRequest updateRequest,
+			Stream? zipFileStream,
+			CancellationToken cancellationToken)
+		{
+			if (updateRequest == null)
+				throw new ArgumentNullException(nameof(updateRequest));
+
+			if (updateRequest.UploadZip == true && zipFileStream == null)
+				throw new ArgumentNullException(nameof(zipFileStream));
+
+			var result = await ApiClient.Update<ServerUpdateRequest, ServerUpdateResponse>(
+				Routes.Administration,
+				updateRequest,
+				cancellationToken);
+
+			if (updateRequest.UploadZip == true)
+				await ApiClient.Upload(result, zipFileStream, cancellationToken).ConfigureAwait(false);
+
+			return result;
+		}
 
 		/// <inheritdoc />
-		public Task Restart(CancellationToken cancellationToken) => apiClient.Delete(Routes.Administration, cancellationToken);
+		public ValueTask Restart(CancellationToken cancellationToken) => ApiClient.Delete(Routes.Administration, cancellationToken);
 
 		/// <inheritdoc />
-		public Task<IReadOnlyList<LogFile>> ListLogs(CancellationToken cancellationToken) => apiClient.Read<IReadOnlyList<LogFile>>(Routes.Logs, cancellationToken);
+		public ValueTask<List<LogFileResponse>> ListLogs(PaginationSettings? paginationSettings, CancellationToken cancellationToken)
+			=> ReadPaged<LogFileResponse>(paginationSettings, Routes.Logs, null, cancellationToken);
 
 		/// <inheritdoc />
-		public Task<LogFile> GetLog(LogFile logFile, CancellationToken cancellationToken) => apiClient.Read<LogFile>(
-			Routes.Logs + Routes.SanitizeGetPath(
-				HttpUtility.UrlEncode(
-					logFile?.Name ?? throw new ArgumentNullException(nameof(logFile)))),
-			cancellationToken);
+		public async ValueTask<Tuple<LogFileResponse, Stream>> GetLog(LogFileResponse logFile, CancellationToken cancellationToken)
+		{
+			var resultFile = await ApiClient.Read<LogFileResponse>(
+				Routes.Logs + Routes.SanitizeGetPath(
+					HttpUtility.UrlEncode(
+						logFile?.Name ?? throw new ArgumentNullException(nameof(logFile)))),
+				cancellationToken)
+				.ConfigureAwait(false);
+
+			var stream = await ApiClient.Download(resultFile, cancellationToken).ConfigureAwait(false);
+			try
+			{
+				return Tuple.Create(resultFile, stream);
+			}
+			catch
+			{
+				stream.Dispose();
+				throw;
+			}
+		}
 	}
 }

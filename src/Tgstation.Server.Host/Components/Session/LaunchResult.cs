@@ -4,19 +4,19 @@ using System.Globalization;
 namespace Tgstation.Server.Host.Components.Session
 {
 	/// <summary>
-	/// Represents the result of trying to start a DD process
+	/// Represents the result of trying to start a DD process.
 	/// </summary>
 	public sealed class LaunchResult
 	{
 		/// <summary>
-		/// The time it took for <see cref="global::System.Diagnostics.Process.WaitForInputIdle()"/> to return. If <see langword="null"/> the startup timed out
+		/// The time it took for <see cref="global::System.Diagnostics.Process.WaitForInputIdle()"/> to return or the initial bridge request to process. If <see langword="null"/> the startup timed out.
 		/// </summary>
-		public TimeSpan? StartupTime { get; set; }
+		public TimeSpan? StartupTime { get; init; }
 
 		/// <summary>
-		/// The <see cref="global::System.Diagnostics.Process.ExitCode"/> if it exited
+		/// The <see cref="global::System.Diagnostics.Process.ExitCode"/> if it exited.
 		/// </summary>
-		public int? ExitCode { get; set; }
+		public int? ExitCode { get; init; }
 
 		/// <inheritdoc />
 		public override string ToString() => String.Format(CultureInfo.InvariantCulture, "Exit Code: {0}, Time {1}ms", ExitCode, StartupTime?.TotalMilliseconds);

@@ -1,51 +1,49 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
-  <Import Project="../../build/Version.props" />
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="../../build/SrcCommon.props" />
 
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <TargetFramework>net472</TargetFramework>
-    <RuntimeIdentifier>win</RuntimeIdentifier>
-    <DebugType>Full</DebugType>
+    <OutputType>WinExe</OutputType>
+    <RuntimeIdentifiers>win-x86;win-x64</RuntimeIdentifiers>
+    <Nullable>enable</Nullable>
+    <!-- DO NOT ADD THE -windows SUFFIX, It makes the service require the desktop runtime instead of the ASP NET Core Hosting Bundle -->
+    <TargetFramework>$(TgsFrameworkVersion)</TargetFramework>
+    <!-- Important that this is core and not host watchdog. Bootstrapping depends on it -->
     <Version>$(TgsCoreVersion)</Version>
-    <CodeAnalysisRuleSet>../../build/analyzers.ruleset</CodeAnalysisRuleSet>
-    <LangVersion>7.3</LangVersion>
-    <DocumentationFile>bin\Debug\Tgstation.Server.Host.Console.xml</DocumentationFile>
-    <IsPackable>false</IsPackable>
-  </PropertyGroup>
-
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <WarningsAsErrors />
-  </PropertyGroup>
-
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
-    <NoWarn>1701;1702;SA1652</NoWarn>
+    <!-- DO NOT ENABLE THIS, It makes the service require the desktop runtime instead of the ASP NET Core Hosting Bundle -->
+    <UseWindowsForms>false</UseWindowsForms>
+    <ApplicationIcon>../../artifacts/tgs.ico</ApplicationIcon>
+    <ApplicationManifest>../../build/uac_elevation_manifest.xml</ApplicationManifest>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="McMaster.Extensions.CommandLineUtils" Version="3.0.0" />
-    <PackageReference Include="Microsoft.CodeAnalysis.FxCopAnalyzers" Version="3.0.0">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-    </PackageReference>
-    <PackageReference Include="Microsoft.Extensions.Logging.EventLog" Version="2.2.0" />
-    <PackageReference Include="StyleCop.Analyzers" Version="1.1.118">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
-    </PackageReference>
+    <!-- Usage: Installing service programatically -->
+    <PackageReference Include="Core.System.ServiceProcess" />
+    <!-- Usage: Command line argument support -->
+    <PackageReference Include="McMaster.Extensions.CommandLineUtils" />
+    <!-- Usage: Identifies when we are running in the context of the Windows SCM -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" />
+    <!-- Usage: Windows event log logging plugin -->
+    <PackageReference Include="Microsoft.Extensions.Logging.EventLog" />
+    <!-- Usage: Console logging plugin -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+    <!-- Usage: Updated transitive dependency of Core.System.ServiceProcess -->
+    <PackageReference Include="Newtonsoft.Json" />
+    <!-- Usage: Updated transitive dependency of Core.System.ServiceProcess -->
+    <PackageReference Include="System.Drawing.Common" />
+    <!-- Usage: Updated transitive dependency, unable to tell what of -->
+    <PackageReference Include="System.Private.Uri" />
+    <!-- Usage: OS identification -->
+    <PackageReference Include="System.Runtime.InteropServices" />
+    <!-- Usage: Windows Service Manager intergration -->
+    <PackageReference Include="System.ServiceProcess.ServiceController" />
   </ItemGroup>
-  
+
   <ItemGroup>
     <ProjectReference Include="..\Tgstation.Server.Host.Watchdog\Tgstation.Server.Host.Watchdog.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <AdditionalFiles Include="../../build/stylecop.json" />
+    <AdditionalFiles Include="../../build/uac_elevation_manifest.xml" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Reference Include="System.Configuration.Install" />
-    <Reference Include="System.ServiceProcess" />
-    <Reference Include="System.Windows.Forms" />
-  </ItemGroup>
 </Project>

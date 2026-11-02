@@ -1,122 +1,145 @@
-using System;
-using System.Globalization;
+﻿using System;
 
 namespace Tgstation.Server.Api
 {
 	/// <summary>
-	/// Routes to a server actions
+	/// Routes to a server actions.
 	/// </summary>
 	public static class Routes
 	{
 		/// <summary>
-		/// The root controller
+		/// The root of API methods.
 		/// </summary>
-		public const string Root = "/";
+		public const string ApiRoot = "/api/";
 
 		/// <summary>
-		/// The <see cref="Models.Administration"/> controller
+		/// The GraphQL route.
 		/// </summary>
-		public const string Administration = Root + nameof(Models.Administration);
+		public const string GraphQL = ApiRoot + "graphql";
 
 		/// <summary>
-		/// The <see cref="Models.Administration"/> controller
+		/// The root route of all hubs.
+		/// </summary>
+		public const string HubsRoot = ApiRoot + "hubs";
+
+		/// <summary>
+		/// The server administration controller.
+		/// </summary>
+		public const string Administration = ApiRoot + "Administration";
+
+		/// <summary>
+		/// The endpoint to download server logs.
 		/// </summary>
 		public const string Logs = Administration + "/Logs";
 
 		/// <summary>
-		/// The <see cref="Models.User"/> controller
+		/// The user controller.
 		/// </summary>
-		public const string User = Root + nameof(Models.User);
+		public const string User = ApiRoot + "User";
 
 		/// <summary>
-		/// The <see cref="Models.Instance"/> controller
+		/// The user group controller.
 		/// </summary>
-		public const string InstanceManager = Root + nameof(Models.Instance);
+		public const string UserGroup = ApiRoot + "UserGroup";
 
 		/// <summary>
-		/// The <see cref="Models.Byond"/> controller
+		/// The <see cref="Models.Instance"/> controller.
 		/// </summary>
-		public const string Byond = Root + nameof(Models.Byond);
+		public const string InstanceManager = ApiRoot + "Instance";
 
 		/// <summary>
-		/// The <see cref="Models.Repository"/> controller
+		/// The engine controller.
 		/// </summary>
-		public const string Repository = Root + nameof(Models.Repository);
+		public const string Engine = ApiRoot + "Engine";
 
 		/// <summary>
-		/// The <see cref="Models.DreamDaemon"/> controller
+		/// The git repository controller.
 		/// </summary>
-		public const string DreamDaemon = Root + nameof(Models.DreamDaemon);
+		public const string Repository = ApiRoot + "Repository";
 
 		/// <summary>
-		/// For accessing DD diagnostics
+		/// The DreamDaemon controller.
+		/// </summary>
+		public const string DreamDaemon = ApiRoot + "DreamDaemon";
+
+		/// <summary>
+		/// For accessing DD diagnostics.
 		/// </summary>
 		public const string Diagnostics = DreamDaemon + "/Diagnostics";
 
 		/// <summary>
-		/// The <see cref="Models.ConfigurationFile"/> controller
+		/// The configuration controller.
 		/// </summary>
-		public const string Configuration = Root + "Config";
+		public const string Configuration = ApiRoot + "Config";
 
 		/// <summary>
-		/// To be paired with <see cref="Configuration"/> for accessing <see cref="Models.ConfigurationFile"/>s
+		/// To be paired with <see cref="Configuration"/> for accessing <see cref="Models.IConfigurationFile"/>s.
 		/// </summary>
 		public const string File = "File";
 
 		/// <summary>
-		/// Full combination of <see cref="Configuration"/> and <see cref="File"/>
+		/// Full combination of <see cref="Configuration"/> and <see cref="File"/>.
 		/// </summary>
 		public const string ConfigurationFile = Configuration + "/" + File;
 
 		/// <summary>
-		/// The <see cref="Models.InstanceUser"/> controller
+		/// The instance permission set controller.
 		/// </summary>
-		public const string InstanceUser = Root + nameof(Models.InstanceUser);
+		public const string InstancePermissionSet = ApiRoot + "InstancePermissionSet";
 
 		/// <summary>
-		/// The <see cref="Models.ChatBot"/> controller
+		/// The chat bot controller.
 		/// </summary>
-		public const string Chat = Root + "Chat";
+		public const string Chat = ApiRoot + "Chat";
 
 		/// <summary>
-		/// The <see cref="Models.DreamMaker"/> controller
+		/// The deployment controller.
 		/// </summary>
-		public const string DreamMaker = Root + nameof(Models.DreamMaker);
+		public const string DreamMaker = ApiRoot + "DreamMaker";
 
 		/// <summary>
-		/// The <see cref="Models.Job"/> controller
+		/// The jobs controller.
 		/// </summary>
-		public const string Jobs = Root + nameof(Models.Job);
+		public const string Jobs = ApiRoot + "Job";
 
 		/// <summary>
-		/// The postfix for list operations
+		/// The transfer controller.
+		/// </summary>
+		public const string Transfer = ApiRoot + "Transfer";
+
+		/// <summary>
+		/// The postfix for list operations.
 		/// </summary>
 		public const string List = "List";
 
 		/// <summary>
-		/// Apply an <paramref name="id"/> postfix to a <paramref name="route"/>
+		/// The root route of all hubs.
 		/// </summary>
-		/// <param name="route">The route</param>
-		/// <param name="id">The ID</param>
-		/// <returns>The <paramref name="route"/> with <paramref name="id"/> appended</returns>
-		public static string SetID(string route, long id) => String.Format(CultureInfo.InvariantCulture, "{0}/{1}", route, id);
+		public const string JobsHub = HubsRoot + "/jobs";
 
 		/// <summary>
-		/// Get the /List postfix for a <paramref name="route"/>
+		/// Apply an <paramref name="id"/> postfix to a <paramref name="route"/>.
 		/// </summary>
-		/// <param name="route">The route</param>
-		/// <returns>The <paramref name="route"/> with /List appended</returns>
-		public static string ListRoute(string route) => String.Format(CultureInfo.InvariantCulture, "{0}/{1}", route, List);
+		/// <param name="route">The route.</param>
+		/// <param name="id">The ID.</param>
+		/// <returns>The <paramref name="route"/> with <paramref name="id"/> appended.</returns>
+		public static string SetID(string route, long id) => $"{route}/{id}";
 
 		/// <summary>
-		/// Sanitize a <see cref="Models.Internal.RawData"/> path for use in a GET <see cref="Uri"/>.
+		/// Get the /List postfix for a <paramref name="route"/>.
+		/// </summary>
+		/// <param name="route">The route.</param>
+		/// <returns>The <paramref name="route"/> with /List appended.</returns>
+		public static string ListRoute(string route) => $"{route}/{List}";
+
+		/// <summary>
+		/// Sanitize a <see cref="Models.Response.FileTicketResponse"/> path for use in a GET <see cref="Uri"/>.
 		/// </summary>
 		/// <param name="path">The path to sanitize.</param>
 		/// <returns>The sanitized path.</returns>
 		public static string SanitizeGetPath(string path)
 		{
-			if (path == null)
-				path = String.Empty;
+			path ??= String.Empty;
 			if (path.Length == 0 || path[0] != '/')
 				path = '/' + path;
 			return path;

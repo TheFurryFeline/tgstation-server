@@ -1,4 +1,4 @@
-using Microsoft.VisualStudio.TestTools.UnitTesting;
+﻿using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Linq;
 
@@ -23,7 +23,7 @@ namespace Tgstation.Server.Api.Rights.Tests
 					Assert.AreEqual(ulongType, Enum.GetUnderlyingType(rightType));
 					var asUlong = (ulong)J;
 					var isOne = asUlong == 1;
-					if(!isOne)
+					if (!isOne)
 						Assert.AreEqual(0U, asUlong % 2, String.Format("Enum {0} of {1} is not a power of 2!", Enum.GetName(rightType, asUlong), rightType));
 
 					if (expectedLog > -1)
@@ -40,10 +40,10 @@ namespace Tgstation.Server.Api.Rights.Tests
 		[TestMethod]
 		public void TestAllRightsWorks()
 		{
-			var allByondRights = ByondRights.CancelInstall | ByondRights.InstallOfficialOrChangeActiveVersion | ByondRights.ListInstalled | ByondRights.ReadActive | ByondRights.InstallCustomVersion;
-			var automaticByondRights = RightsHelper.AllRights<ByondRights>();
+			var allEngineRights = EngineRights.CancelInstall | EngineRights.InstallOfficialOrChangeActiveByondVersion | EngineRights.ListInstalled | EngineRights.ReadActive | EngineRights.InstallCustomByondVersion | EngineRights.DeleteInstall | EngineRights.InstallCustomOpenDreamVersion | EngineRights.InstallOfficialOrChangeActiveOpenDreamVersion;
+			var automaticByondRights = RightsHelper.AllRights<EngineRights>();
 
-			Assert.AreEqual(allByondRights, automaticByondRights);
+			Assert.AreEqual(allEngineRights, automaticByondRights);
 		}
 	}
 }

@@ -1,30 +1,36 @@
 ﻿using System;
-using Tgstation.Server.Host.Models;
+
+using Tgstation.Server.Api.Models;
 
 namespace Tgstation.Server.Host.Components.Deployment
 {
 	/// <summary>
-	/// Provides absolute paths to the latest compiled .dmbs
+	/// Provides absolute paths to the latest compiled .dmbs.
 	/// </summary>
-	public interface IDmbProvider : IDisposable
+	public interface IDmbProvider : IAsyncDisposable
 	{
 		/// <summary>
-		/// The file name of the .dmb
+		/// The file name of the .dmb.
 		/// </summary>
 		string DmbName { get; }
 
 		/// <summary>
-		/// The primary game directory with a trailing directory separator
+		/// The primary game directory.
 		/// </summary>
 		string Directory { get; }
 
 		/// <summary>
-		/// The <see cref="CompileJob"/> of the .dmb
+		/// The <see cref="CompileJob"/> of the .dmb.
 		/// </summary>
-		CompileJob CompileJob { get; }
+		Models.CompileJob CompileJob { get; }
 
 		/// <summary>
-		/// Disposing the <see cref="IDmbProvider"/> won't cause a cleanup of the working directory
+		/// The <see cref="Api.Models.EngineVersion"/> used to build the .dmb.
+		/// </summary>
+		EngineVersion EngineVersion { get; }
+
+		/// <summary>
+		/// Disposing the <see cref="IDmbProvider"/> won't cause a cleanup of the working directory.
 		/// </summary>
 		void KeepAlive();
 	}

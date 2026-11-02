@@ -1,11 +1,12 @@
 ﻿using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.Linq;
 
 
 namespace Tgstation.Server.Host.Components.Events.Tests
 {
 	/// <summary>
-	/// Tests for the <see cref="EventScriptAttribute"/> <see langword="class"/>.
+	/// Tests for the <see cref="EventScriptAttribute"/> class.
 	/// </summary>
 	[TestClass]
 	public sealed class TestEventScriptAttribute
@@ -13,9 +14,9 @@ namespace Tgstation.Server.Host.Components.Events.Tests
 		[TestMethod]
 		public void TestConstruction()
 		{
-			Assert.ThrowsException<ArgumentNullException>(() => new EventScriptAttribute(null));
-			var test = new EventScriptAttribute("test");
-			Assert.AreEqual("test", test.ScriptName);
+			Assert.ThrowsExactly<ArgumentNullException>(() => new EventScriptAttribute(null));
+			var test = new EventScriptAttribute("test1", "test2");
+			Assert.IsTrue(test.ScriptNames.SequenceEqual(["test1", "test2"]));
 		}
 	}
 }

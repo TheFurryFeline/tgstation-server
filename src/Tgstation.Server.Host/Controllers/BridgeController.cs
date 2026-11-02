@@ -1,42 +1,75 @@
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
-using Serilog.Context;
-using System;
+﻿using System;
 using System.Net;
 using System.Net.Mime;
 using System.Threading;
 using System.Threading.Tasks;
+
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+
+using Newtonsoft.Json;
+
+using Serilog.Context;
+
+using Tgstation.Server.Api;
 using Tgstation.Server.Host.Components.Interop;
 using Tgstation.Server.Host.Components.Interop.Bridge;
+using Tgstation.Server.Host.Utils;
 
 namespace Tgstation.Server.Host.Controllers
 {
 	/// <summary>
-	/// <see cref="Controller"/> for recieving DMAPI requests from DreamDaemon.
+	/// <see cref="Controller"/> for receiving DMAPI requests from DreamDaemon.
 	/// </summary>
-	[Route("Bridge")]
-	[Produces(MediaTypeNames.Application.Json)]
-	public class BridgeController : Controller
+	[Route("/" + RouteExtension)] // obsolete route, but BYOND can't handle a simple fucking 301
+	[Route(Routes.ApiRoot + RouteExtension)]
+	[ApiExplorerSettings(IgnoreApi = true)]
+	public sealed class BridgeController : ApiControllerBase
 	{
+		/// <summary>
+		/// The route to the <see cref="BridgeController"/>.
+		/// </summary>
+		const string RouteExtension = "Bridge";
+
+		/// <summary>
+		/// If the content of bridge requests and responses should be logged.
+		/// </summary>
+		static bool LogContent => logContentDisableCounter == 0;
+
+		/// <summary>
+		/// Counter which, if not zero, indicates content logging should be disabled.
+		/// </summary>
+		static uint logContentDisableCounter;
+
 		/// <summary>
 		/// Static counter for the number of requests processed.
 		/// </summary>
 		static long requestsProcessed;
 
 		/// <summary>
-		/// The <see cref="IBridgeDispatcher"/> for the <see cref="BridgeController"/>
+		/// The <see cref="IBridgeDispatcher"/> for the <see cref="BridgeController"/>.
 		/// </summary>
 		readonly IBridgeDispatcher bridgeDispatcher;
 
 		/// <summary>
-		/// The <see cref="ILogger"/> for the <see cref="BridgeController"/>
+		/// The <see cref="ILogger"/> for the <see cref="BridgeController"/>.
 		/// </summary>
 		readonly ILogger<BridgeController> logger;
 
 		/// <summary>
-		/// Initializes a new instance of the <see cref="BridgeController"/> <see langword="class"/>.
+		/// Temporarily disable content logging. Must be followed up with a call to <see cref="ReenableContentLogging"/>.
+		/// </summary>
+		internal static void TemporarilyDisableContentLogging() => Interlocked.Increment(ref logContentDisableCounter);
+
+		/// <summary>
+		/// Reenable content logging. Must be preceeded with a call to <see cref="TemporarilyDisableContentLogging"/>.
+		/// </summary>
+		internal static void ReenableContentLogging() => Interlocked.Decrement(ref logContentDisableCounter);
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="BridgeController"/> class.
 		/// </summary>
 		/// <param name="bridgeDispatcher">The value of <see cref="bridgeDispatcher"/>.</param>
 		/// <param name="applicationLifetime">The <see cref="IHostApplicationLifetime"/> of the server.</param>
@@ -44,8 +77,7 @@ namespace Tgstation.Server.Host.Controllers
 		public BridgeController(IBridgeDispatcher bridgeDispatcher, IHostApplicationLifetime applicationLifetime, ILogger<BridgeController> logger)
 		{
 			this.bridgeDispatcher = bridgeDispatcher ?? throw new ArgumentNullException(nameof(bridgeDispatcher));
-			if (applicationLifetime == null)
-				throw new ArgumentNullException(nameof(applicationLifetime));
+			ArgumentNullException.ThrowIfNull(applicationLifetime);
 
 			this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
@@ -56,40 +88,60 @@ namespace Tgstation.Server.Host.Controllers
 		/// Processes a bridge request.
 		/// </summary>
 		/// <param name="data">JSON encoded <see cref="BridgeParameters"/>.</param>
-		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation</param>
-		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> for the operation.</returns>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the <see cref="IActionResult"/> for the operation.</returns>
 		[HttpGet]
-		public async Task<IActionResult> Process([FromQuery]string data, CancellationToken cancellationToken)
+		[AllowAnonymous]
+		public async ValueTask<IActionResult> Process([FromQuery] string data, CancellationToken cancellationToken)
 		{
-			// Nothing to see here
-			var remoteIP = Request.HttpContext.Connection.RemoteIpAddress;
-			if (!IPAddress.IsLoopback(remoteIP))
+			using (LogContext.PushProperty(SerilogContextHelper.BridgeRequestIterationContextProperty, Interlocked.Increment(ref requestsProcessed)))
 			{
-				logger.LogTrace("Ignoring remote bridge request from {0}", remoteIP);
-				return NotFound();
-			}
+				// Nothing to see here
+				var remoteIP = Request.HttpContext.Connection.RemoteIpAddress;
+				if (remoteIP == null || !IPAddress.IsLoopback(remoteIP))
+				{
+					logger.LogTrace("Rejecting remote bridge request from {remoteIP}", remoteIP);
+					return Forbid();
+				}
 
-			using (LogContext.PushProperty("Bridge", Interlocked.Increment(ref requestsProcessed)))
-			{
-				BridgeParameters request;
+				BridgeParameters? request;
 				try
 				{
 					request = JsonConvert.DeserializeObject<BridgeParameters>(data, DMApiConstants.SerializerSettings);
 				}
 				catch (Exception ex)
 				{
-					logger.LogWarning(ex, "Error deserializing bridge request: {0}", data);
+					if (LogContent)
+						logger.LogWarning(ex, "Error deserializing bridge request: {badJson}", data);
+					else
+						logger.LogWarning(ex, "Error deserializing bridge request!");
+
 					return BadRequest();
 				}
 
-				logger.LogTrace("Bridge Request: {0}", data);
+				if (request == null)
+				{
+					if (LogContent)
+						logger.LogWarning("Error deserializing bridge request: {badJson}", data);
+					else
+						logger.LogWarning("Error deserializing bridge request!");
 
-				var response = await bridgeDispatcher.ProcessBridgeRequest(request, cancellationToken).ConfigureAwait(false);
+					return BadRequest();
+				}
+
+				if (LogContent)
+					logger.LogTrace("Bridge Request: {json}", data);
+				else
+					logger.LogTrace("Bridge Request");
+
+				var response = await bridgeDispatcher.ProcessBridgeRequest(request, cancellationToken);
 				if (response == null)
-					Forbid();
+					return Unauthorized();
 
 				var responseJson = JsonConvert.SerializeObject(response, DMApiConstants.SerializerSettings);
-				logger.LogTrace("Bridge Response: {0}", responseJson);
+
+				if (LogContent)
+					logger.LogTrace("Bridge Response: {json}", responseJson);
 				return Content(responseJson, MediaTypeNames.Application.Json);
 			}
 		}

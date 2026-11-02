@@ -1,12 +1,16 @@
-﻿using Newtonsoft.Json;
+﻿using System;
+
+using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
-using System;
-using Tgstation.Server.Host.Components.Interop.Converters;
+
+using Tgstation.Server.Host.Extensions.Converters;
+using Tgstation.Server.Host.Properties;
+using Tgstation.Server.Shared;
 
 namespace Tgstation.Server.Host.Components.Interop
 {
 	/// <summary>
-	/// Constants used for communication with the DMAPI
+	/// Constants used for communication with the DMAPI.
 	/// </summary>
 	static class DMApiConstants
 	{
@@ -31,26 +35,42 @@ namespace Tgstation.Server.Host.Components.Interop
 		public const string TopicData = "tgs_data";
 
 		/// <summary>
-		/// The DMAPI <see cref="Version"/> being used.
+		/// The maximum length of a BYOND side bridge request URL.
 		/// </summary>
-		public static readonly Version Version = new Version(5, 2, 3);
+		/// <remarks>Testing has revealed that response size is effectively limited only by other factors like RAM.</remarks>
+		public const uint MaximumBridgeRequestLength = 8198;
+
+		/// <summary>
+		/// The maximum length in bytes of a <see cref="Byond.TopicSender.ITopicClient"/> payload.
+		/// </summary>
+		public const uint MaximumTopicRequestLength = 65528;
+
+		/// <summary>
+		/// The maximum length in bytes of a <see cref="Byond.TopicSender.ITopicClient"/> response.
+		/// </summary>
+		public const uint MaximumTopicResponseLength = 65529;
+
+		/// <summary>
+		/// The DMAPI <see cref="InteropVersion"/> being used.
+		/// </summary>
+		public static readonly Version InteropVersion = Version.Parse(MasterVersionsAttribute.Instance.RawInteropVersion);
 
 		/// <summary>
 		/// <see cref="JsonSerializerSettings"/> for use when communicating with the DMAPI.
 		/// </summary>
-		public static readonly JsonSerializerSettings SerializerSettings = new JsonSerializerSettings
+		public static readonly JsonSerializerSettings SerializerSettings = new()
 		{
 			ContractResolver = new DefaultContractResolver
 			{
-				NamingStrategy = new CamelCaseNamingStrategy()
+				NamingStrategy = new CamelCaseNamingStrategy(),
 			},
 			Converters = new JsonConverter[]
 			{
 				new VersionConverter(),
-				new BoolConverter()
+				new BoolConverter(),
 			},
 			DefaultValueHandling = DefaultValueHandling.Ignore,
-			ReferenceLoopHandling = ReferenceLoopHandling.Ignore
+			ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
 		};
 	}
 }

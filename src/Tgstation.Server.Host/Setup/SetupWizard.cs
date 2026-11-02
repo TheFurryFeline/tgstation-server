@@ -1,64 +1,73 @@
-﻿using Microsoft.Data.Sqlite;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
-using MySql.Data.MySqlClient;
-using Newtonsoft.Json;
-using Npgsql;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Data.Common;
-using System.Data.SqlClient;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+
+using Microsoft.Data.SqlClient;
+using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
+using MySqlConnector;
+
+using Npgsql;
+
+using Tgstation.Server.Common;
 using Tgstation.Server.Host.Configuration;
-using Tgstation.Server.Host.Core;
 using Tgstation.Server.Host.Database;
 using Tgstation.Server.Host.IO;
+using Tgstation.Server.Host.Properties;
 using Tgstation.Server.Host.System;
+using Tgstation.Server.Host.Utils;
+using Tgstation.Server.Shared;
+
+using YamlDotNet.Serialization;
 
 namespace Tgstation.Server.Host.Setup
 {
 	/// <inheritdoc />
-	sealed class SetupWizard : IHostedService
+	sealed class SetupWizard : BackgroundService
 	{
 		/// <summary>
-		/// The <see cref="IIOManager"/> for the <see cref="SetupWizard"/>
+		/// The <see cref="IIOManager"/> for the <see cref="SetupWizard"/>.
 		/// </summary>
 		readonly IIOManager ioManager;
 
 		/// <summary>
-		/// The <see cref="IConsole"/> for the <see cref="SetupWizard"/>
+		/// The <see cref="IConsole"/> for the <see cref="SetupWizard"/>.
 		/// </summary>
 		readonly IConsole console;
 
 		/// <summary>
-		/// The <see cref="IHostEnvironment"/> for the <see cref="SetupWizard"/>
+		/// The <see cref="IHostEnvironment"/> for the <see cref="SetupWizard"/>.
 		/// </summary>
 		readonly IHostEnvironment hostingEnvironment;
 
 		/// <summary>
-		/// The <see cref="IAssemblyInformationProvider"/> for the <see cref="SetupWizard"/>
+		/// The <see cref="IAssemblyInformationProvider"/> for the <see cref="SetupWizard"/>.
 		/// </summary>
 		readonly IAssemblyInformationProvider assemblyInformationProvider;
 
 		/// <summary>
-		/// The <see cref="IDatabaseConnectionFactory"/> for the <see cref="SetupWizard"/>
+		/// The <see cref="IDatabaseConnectionFactory"/> for the <see cref="SetupWizard"/>.
 		/// </summary>
 		readonly IDatabaseConnectionFactory dbConnectionFactory;
 
 		/// <summary>
-		/// The <see cref="IPlatformIdentifier"/> for the <see cref="SetupWizard"/>
+		/// The <see cref="IPlatformIdentifier"/> for the <see cref="SetupWizard"/>.
 		/// </summary>
 		readonly IPlatformIdentifier platformIdentifier;
 
 		/// <summary>
-		/// The <see cref="IAsyncDelayer"/> for the <see cref="SetupWizard"/>
+		/// The <see cref="IAsyncDelayer"/> for the <see cref="SetupWizard"/>.
 		/// </summary>
 		readonly IAsyncDelayer asyncDelayer;
 
@@ -68,22 +77,34 @@ namespace Tgstation.Server.Host.Setup
 		readonly IHostApplicationLifetime applicationLifetime;
 
 		/// <summary>
-		/// The <see cref="GeneralConfiguration"/> for the <see cref="SetupWizard"/>
+		/// The <see cref="IPostSetupServices"/> for the <see cref="SetupWizard"/>.
+		/// </summary>
+		readonly IPostSetupServices postSetupServices;
+
+		/// <summary>
+		/// The <see cref="GeneralConfiguration"/> for the <see cref="SetupWizard"/>.
 		/// </summary>
 		readonly GeneralConfiguration generalConfiguration;
 
 		/// <summary>
-		/// Construct a <see cref="SetupWizard"/>
+		/// The <see cref="InternalConfiguration"/> for the <see cref="SetupWizard"/>.
 		/// </summary>
-		/// <param name="ioManager">The value of <see cref="ioManager"/></param>
-		/// <param name="console">The value of <see cref="console"/></param>
-		/// <param name="hostingEnvironment">The value of <see cref="hostingEnvironment"/></param>
-		/// <param name="assemblyInformationProvider">The value of <see cref="assemblyInformationProvider"/></param>
-		/// <param name="dbConnectionFactory">The value of <see cref="dbConnectionFactory"/></param>
-		/// <param name="platformIdentifier">The value of <see cref="platformIdentifier"/></param>
-		/// <param name="asyncDelayer">The value of <see cref="asyncDelayer"/></param>
+		readonly InternalConfiguration internalConfiguration;
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="SetupWizard"/> class.
+		/// </summary>
+		/// <param name="ioManager">The value of <see cref="ioManager"/>.</param>
+		/// <param name="console">The value of <see cref="console"/>.</param>
+		/// <param name="hostingEnvironment">The value of <see cref="hostingEnvironment"/>.</param>
+		/// <param name="assemblyInformationProvider">The value of <see cref="assemblyInformationProvider"/>.</param>
+		/// <param name="dbConnectionFactory">The value of <see cref="dbConnectionFactory"/>.</param>
+		/// <param name="platformIdentifier">The value of <see cref="platformIdentifier"/>.</param>
+		/// <param name="asyncDelayer">The value of <see cref="asyncDelayer"/>.</param>
 		/// <param name="applicationLifetime">The value of <see cref="applicationLifetime"/>.</param>
-		/// <param name="generalConfigurationOptions">The <see cref="IOptions{TOptions}"/> containing the value of <see cref="generalConfiguration"/></param>
+		/// <param name="postSetupServices">The value of <see cref="postSetupServices"/>.</param>
+		/// <param name="generalConfigurationOptions">The <see cref="IOptions{TOptions}"/> containing the value of <see cref="generalConfiguration"/>.</param>
+		/// <param name="internalConfigurationOptions">The <see cref="IOptions{TOptions}"/> containing the value of <see cref="internalConfiguration"/>.</param>
 		public SetupWizard(
 			IIOManager ioManager,
 			IConsole console,
@@ -93,7 +114,9 @@ namespace Tgstation.Server.Host.Setup
 			IPlatformIdentifier platformIdentifier,
 			IAsyncDelayer asyncDelayer,
 			IHostApplicationLifetime applicationLifetime,
-			IOptions<GeneralConfiguration> generalConfigurationOptions)
+			IPostSetupServices postSetupServices,
+			IOptions<GeneralConfiguration> generalConfigurationOptions,
+			IOptions<InternalConfiguration> internalConfigurationOptions)
 		{
 			this.ioManager = ioManager ?? throw new ArgumentNullException(nameof(ioManager));
 			this.console = console ?? throw new ArgumentNullException(nameof(console));
@@ -103,55 +126,74 @@ namespace Tgstation.Server.Host.Setup
 			this.platformIdentifier = platformIdentifier ?? throw new ArgumentNullException(nameof(platformIdentifier));
 			this.asyncDelayer = asyncDelayer ?? throw new ArgumentNullException(nameof(asyncDelayer));
 			this.applicationLifetime = applicationLifetime ?? throw new ArgumentNullException(nameof(applicationLifetime));
+			this.postSetupServices = postSetupServices ?? throw new ArgumentNullException(nameof(postSetupServices));
+
 			generalConfiguration = generalConfigurationOptions?.Value ?? throw new ArgumentNullException(nameof(generalConfigurationOptions));
+			internalConfiguration = internalConfigurationOptions?.Value ?? throw new ArgumentNullException(nameof(internalConfigurationOptions));
+		}
+
+		/// <inheritdoc />
+		protected override async Task ExecuteAsync(CancellationToken cancellationToken)
+		{
+			await CheckRunWizard(cancellationToken);
+			applicationLifetime.StopApplication();
 		}
 
 		/// <summary>
-		/// A prompt for a yes or no value
+		/// A prompt for a yes or no value.
 		/// </summary>
-		/// <param name="question">The question <see cref="string"/></param>
-		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation</param>
-		/// <returns>A <see cref="Task"/> resulting in <see langword="true"/> if the user replied yes, <see langword="false"/> otherwise</returns>
-		async Task<bool> PromptYesNo(string question, CancellationToken cancellationToken)
+		/// <param name="question">The question <see cref="string"/>.</param>
+		/// <param name="defaultResponse">The optional default response if the user doesn't enter anything.</param>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="ValueTask"/> resulting in <see langword="true"/> if the user replied yes, <see langword="false"/> otherwise.</returns>
+		async ValueTask<bool> PromptYesNo(string question, bool? defaultResponse, CancellationToken cancellationToken)
 		{
 			do
 			{
-				await console.WriteAsync(question, false, cancellationToken).ConfigureAwait(false);
-				var responseString = await console.ReadLineAsync(false, cancellationToken).ConfigureAwait(false);
-				var upperResponse = responseString.ToUpperInvariant();
-				if (upperResponse == "Y" || upperResponse == "YES")
-					return true;
-				else if (upperResponse == "N" || upperResponse == "NO")
-					return false;
-				await console.WriteAsync("Invalid response!", true, cancellationToken).ConfigureAwait(false);
+				await console.WriteAsync($"{question} ({(defaultResponse == true ? 'Y' : 'y')}/{(defaultResponse == false ? 'N' : 'n')}): ", false, cancellationToken);
+				var responseString = await console.ReadLineAsync(false, cancellationToken);
+				if (responseString.Length == 0)
+				{
+					if (defaultResponse.HasValue)
+						return defaultResponse.Value;
+				}
+				else
+				{
+					var upperResponse = responseString.ToUpperInvariant();
+					if (upperResponse == "Y" || upperResponse == "YES")
+						return true;
+					else if (upperResponse == "N" || upperResponse == "NO")
+						return false;
+				}
+
+				await console.WriteAsync("Invalid response!", true, cancellationToken);
 			}
 			while (true);
 		}
 
 		/// <summary>
-		/// Prompts the user to enter the port to host TGS on
+		/// Prompts the user to enter the port to host TGS on.
 		/// </summary>
-		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation</param>
-		/// <returns>A <see cref="Task"/> resulting in the hosting port, or <see langword="null"/> to use the default</returns>
-		async Task<ushort?> PromptForHostingPort(CancellationToken cancellationToken)
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="ValueTask"/> resulting in the hosting port, or <see langword="null"/> to use the default.</returns>
+		async ValueTask<ushort?> PromptForHostingPort(CancellationToken cancellationToken)
 		{
-			await console.WriteAsync(null, true, cancellationToken).ConfigureAwait(false);
-			await console.WriteAsync("What port would you like to connect to TGS on?", true, cancellationToken).ConfigureAwait(false);
-			await console.WriteAsync("Note: If this is a docker container with the default port already mapped, use the default.", true, cancellationToken).ConfigureAwait(false);
+			await console.WriteAsync(null, true, cancellationToken);
+			await console.WriteAsync("What port would you like to connect to TGS on?", true, cancellationToken);
+			await console.WriteAsync("Note: If this is a docker container with the default port already mapped, use the default.", true, cancellationToken);
 
 			do
 			{
 				await console.WriteAsync(
 					$"API Port (leave blank for default of {GeneralConfiguration.DefaultApiPort}): ",
 					false,
-					cancellationToken)
-					.ConfigureAwait(false);
-				var portString = await console.ReadLineAsync(false, cancellationToken).ConfigureAwait(false);
+					cancellationToken);
+				var portString = await console.ReadLineAsync(false, cancellationToken);
 				if (String.IsNullOrWhiteSpace(portString))
 					return null;
 				if (UInt16.TryParse(portString, out var port) && port != 0)
 					return port;
-				await console.WriteAsync("Invalid port! Please enter a value between 1 and 65535", true, cancellationToken).ConfigureAwait(false);
+				await console.WriteAsync("Invalid port! Please enter a value between 1 and 65535", true, cancellationToken);
 			}
 			while (true);
 		}
@@ -164,8 +206,8 @@ namespace Tgstation.Server.Host.Setup
 		/// <param name="databaseName">The database name (or path in the case of a <see cref="DatabaseType.Sqlite"/> database).</param>
 		/// <param name="dbExists">Whether or not the database exists.</param>
 		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
-		/// <returns>A <see cref="Task"/> representing the running operation.</returns>
-		async Task TestDatabaseConnection(
+		/// <returns>A <see cref="ValueTask"/> representing the running operation.</returns>
+		async ValueTask TestDatabaseConnection(
 			DbConnection testConnection,
 			DatabaseConfiguration databaseConfiguration,
 			string databaseName,
@@ -175,19 +217,22 @@ namespace Tgstation.Server.Host.Setup
 			bool isSqliteDB = databaseConfiguration.DatabaseType == DatabaseType.Sqlite;
 			using (testConnection)
 			{
-				await console.WriteAsync("Testing connection...", true, cancellationToken).ConfigureAwait(false);
-				await testConnection.OpenAsync(cancellationToken).ConfigureAwait(false);
-				await console.WriteAsync("Connection successful!", true, cancellationToken).ConfigureAwait(false);
+				await console.WriteAsync("Testing connection...", true, cancellationToken);
+				await testConnection.OpenAsync(cancellationToken);
+				await console.WriteAsync("Connection successful!", true, cancellationToken);
 
 				if (databaseConfiguration.DatabaseType == DatabaseType.MariaDB
 					|| databaseConfiguration.DatabaseType == DatabaseType.MySql
 					|| databaseConfiguration.DatabaseType == DatabaseType.PostgresSql)
 				{
-					await console.WriteAsync($"Checking {databaseConfiguration.DatabaseType} version...", true, cancellationToken).ConfigureAwait(false);
+					await console.WriteAsync($"Checking {databaseConfiguration.DatabaseType} version...", true, cancellationToken);
 					using var command = testConnection.CreateCommand();
 					command.CommandText = "SELECT VERSION()";
-					var fullVersion = (string)await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-					await console.WriteAsync(String.Format(CultureInfo.InvariantCulture, "Found {0}", fullVersion), true, cancellationToken).ConfigureAwait(false);
+					var fullVersion = (string?)await command.ExecuteScalarAsync(cancellationToken);
+					await console.WriteAsync(String.Format(CultureInfo.InvariantCulture, "Found {0}", fullVersion), true, cancellationToken);
+
+					if (fullVersion == null)
+						throw new InvalidOperationException($"\"{command.CommandText}\" returned null!");
 
 					if (databaseConfiguration.DatabaseType == DatabaseType.PostgresSql)
 					{
@@ -203,18 +248,18 @@ namespace Tgstation.Server.Host.Setup
 
 				if (!isSqliteDB && !dbExists)
 				{
-					await console.WriteAsync("Testing create DB permission...", true, cancellationToken).ConfigureAwait(false);
+					await console.WriteAsync("Testing create DB permission...", true, cancellationToken);
 					using (var command = testConnection.CreateCommand())
 					{
 						// I really don't care about user sanitization here, they want to fuck their own DB? so be it
 #pragma warning disable CA2100 // Review SQL queries for security vulnerabilities
 						command.CommandText = $"CREATE DATABASE {databaseName}";
 #pragma warning restore CA2100 // Review SQL queries for security vulnerabilities
-						await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+						await command.ExecuteNonQueryAsync(cancellationToken);
 					}
 
-					await console.WriteAsync("Success!", true, cancellationToken).ConfigureAwait(false);
-					await console.WriteAsync("Dropping test database...", true, cancellationToken).ConfigureAwait(false);
+					await console.WriteAsync("Success!", true, cancellationToken);
+					await console.WriteAsync("Dropping test database...", true, cancellationToken);
 					using (var command = testConnection.CreateCommand())
 					{
 #pragma warning disable CA2100 // Review SQL queries for security vulnerabilities
@@ -222,7 +267,7 @@ namespace Tgstation.Server.Host.Setup
 #pragma warning restore CA2100 // Review SQL queries for security vulnerabilities
 						try
 						{
-							await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+							await command.ExecuteNonQueryAsync(cancellationToken);
 						}
 						catch (OperationCanceledException)
 						{
@@ -230,38 +275,55 @@ namespace Tgstation.Server.Host.Setup
 						}
 						catch (Exception e)
 						{
-							await console.WriteAsync(e.Message, true, cancellationToken).ConfigureAwait(false);
-							await console.WriteAsync(null, true, cancellationToken).ConfigureAwait(false);
-							await console.WriteAsync("This should be okay, but you may want to manually drop the database before continuing!", true, cancellationToken).ConfigureAwait(false);
-							await console.WriteAsync("Press any key to continue...", true, cancellationToken).ConfigureAwait(false);
-							await console.PressAnyKeyAsync(cancellationToken).ConfigureAwait(false);
+							await console.WriteAsync(e.Message, true, cancellationToken);
+							await console.WriteAsync(null, true, cancellationToken);
+							await console.WriteAsync("This should be okay, but you may want to manually drop the database before continuing!", true, cancellationToken);
+							await console.WriteAsync("Press any key to continue...", true, cancellationToken);
+							await console.PressAnyKeyAsync(cancellationToken);
 						}
 					}
 				}
+
+				await testConnection.CloseAsync();
 			}
 
 			if (isSqliteDB && !dbExists)
-				await Task.WhenAll(
-					console.WriteAsync("Deleting test database file...", true, cancellationToken),
-					ioManager.DeleteFile(databaseName, cancellationToken)).ConfigureAwait(false);
+			{
+				await console.WriteAsync("Deleting test database file...", true, cancellationToken);
+				if (platformIdentifier.IsWindows)
+					SqliteConnection.ClearAllPools();
+				await ioManager.DeleteFile(databaseName, cancellationToken);
+			}
 		}
 
-		async Task<string> ValidateNonExistantSqliteDBName(string databaseName, CancellationToken cancellationToken)
+		/// <summary>
+		/// Check that a given SQLite <paramref name="databaseName"/> is can be accessed. Also prompts the user if they want to use a relative or absolute path.
+		/// </summary>
+		/// <param name="databaseName">The path to the potential SQLite database file.</param>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the SQLite database path to store in the configuration.</returns>
+		async ValueTask<string?> ValidateNonExistantSqliteDBName(string databaseName, CancellationToken cancellationToken)
 		{
-			var resolvedPath = ioManager.ResolvePath(databaseName);
+			var dbPathIsRooted = ioManager.IsPathRooted(databaseName);
+			var resolvedPath = ioManager.ResolvePath(
+				dbPathIsRooted
+					? databaseName
+					: ioManager.ConcatPath(
+						internalConfiguration.AppSettingsBasePath,
+						databaseName));
 			try
 			{
 				var directoryName = ioManager.GetDirectoryName(resolvedPath);
-				bool directoryExisted = await ioManager.DirectoryExists(directoryName, cancellationToken).ConfigureAwait(false);
-				await ioManager.CreateDirectory(directoryName, cancellationToken).ConfigureAwait(false);
+				bool directoryExisted = await ioManager.DirectoryExists(directoryName, cancellationToken);
+				await ioManager.CreateDirectory(directoryName, cancellationToken);
 				try
 				{
-					await ioManager.WriteAllBytes(resolvedPath, Array.Empty<byte>(), cancellationToken).ConfigureAwait(false);
+					await ioManager.WriteAllBytes(resolvedPath, Array.Empty<byte>(), cancellationToken);
 				}
 				catch
 				{
 					if (!directoryExisted)
-						await ioManager.DeleteDirectory(directoryName, cancellationToken).ConfigureAwait(false);
+						await ioManager.DeleteDirectory(directoryName, cancellationToken);
 					throw;
 				}
 			}
@@ -270,20 +332,20 @@ namespace Tgstation.Server.Host.Setup
 				return null;
 			}
 
-			if (!Path.IsPathRooted(databaseName))
+			if (!dbPathIsRooted)
 			{
-				await console.WriteAsync("Note, this relative path (currently) resolves to the following:", true, cancellationToken).ConfigureAwait(false);
-				await console.WriteAsync(resolvedPath, true, cancellationToken).ConfigureAwait(false);
+				await console.WriteAsync("Note, this relative path currently resolves to the following:", true, cancellationToken);
+				await console.WriteAsync(resolvedPath, true, cancellationToken);
 				bool writeResolved = await PromptYesNo(
-					"Would you like to save the relative path in the configuration? If not, the full path will be saved. (y/n): ",
-					cancellationToken)
-					.ConfigureAwait(false);
+					"Would you like to save the relative path in the configuration? If not, the full path will be saved.",
+					null,
+					cancellationToken);
 
 				if (writeResolved)
 					databaseName = resolvedPath;
 			}
 
-			await ioManager.DeleteFile(databaseName, cancellationToken).ConfigureAwait(false);
+			await ioManager.DeleteFile(databaseName, cancellationToken);
 			return databaseName;
 		}
 
@@ -292,38 +354,29 @@ namespace Tgstation.Server.Host.Setup
 		/// </summary>
 		/// <param name="firstTime">If this is the user's first time here.</param>
 		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
-		/// <returns>A <see cref="Task{TResult}"/> resulting in the input <see cref="DatabaseType"/>.</returns>
-		async Task<DatabaseType> PromptDatabaseType(bool firstTime, CancellationToken cancellationToken)
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the input <see cref="DatabaseType"/>.</returns>
+		async ValueTask<DatabaseType> PromptDatabaseType(bool firstTime, CancellationToken cancellationToken)
 		{
 			if (firstTime)
 			{
-				await console.WriteAsync(String.Empty, true, cancellationToken).ConfigureAwait(false);
-				await console.WriteAsync(
-					"NOTE: It is HIGHLY reccommended that TGS runs on a complete relational database, specfically *NOT* Sqlite.",
-					true,
-					cancellationToken)
-					.ConfigureAwait(false);
-				await console.WriteAsync(
-					"Sqlite, by nature cannot perform several DDL operations. Because of this future compatiblility cannot be guaranteed.",
-					true,
-					cancellationToken)
-					.ConfigureAwait(false);
-				await console.WriteAsync(
-					"This means that you may not be able to update to the next minor version of TGS4 without a clean re-installation!",
-					true,
-					cancellationToken)
-					.ConfigureAwait(false);
-				await console.WriteAsync(
-					"Please consider taking the time to set up a relational database if this is meant to be a long-standing server.",
-					true,
-					cancellationToken)
-					.ConfigureAwait(false);
-				await console.WriteAsync(String.Empty, true, cancellationToken).ConfigureAwait(false);
+				if (internalConfiguration.MariaDBSetup)
+				{
+					await console.WriteAsync("It looks like you just installed MariaDB. Selecting it as the database type.", true, cancellationToken);
+					return DatabaseType.MariaDB;
+				}
 
-				await asyncDelayer.Delay(TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false);
+				await console.WriteAsync(String.Empty, true, cancellationToken);
+				await console.WriteAsync(
+					"NOTE: If you are serious about hosting public servers, it is HIGHLY reccommended that TGS runs on a database *OTHER THAN* Sqlite.",
+					true,
+					cancellationToken);
+				await console.WriteAsync(
+					"It is, however, the easiest option to get started with and will pose few if any problems in a single user scenario.",
+					true,
+					cancellationToken);
 			}
 
-			await console.WriteAsync("What SQL database type will you be using?", true, cancellationToken).ConfigureAwait(false);
+			await console.WriteAsync("What SQL database type will you be using?", true, cancellationToken);
 			do
 			{
 				await console.WriteAsync(
@@ -336,46 +389,57 @@ namespace Tgstation.Server.Host.Setup
 						DatabaseType.SqlServer,
 						DatabaseType.Sqlite),
 					false,
-					cancellationToken)
-					.ConfigureAwait(false);
-				var databaseTypeString = await console.ReadLineAsync(false, cancellationToken).ConfigureAwait(false);
+					cancellationToken);
+				var databaseTypeString = await console.ReadLineAsync(false, cancellationToken);
 				if (Enum.TryParse<DatabaseType>(databaseTypeString, out var databaseType))
 					return databaseType;
 
-				await console.WriteAsync("Invalid database type!", true, cancellationToken).ConfigureAwait(false);
+				await console.WriteAsync("Invalid database type!", true, cancellationToken);
 			}
 			while (true);
 		}
 
 		/// <summary>
-		/// Prompts the user to create a <see cref="DatabaseConfiguration"/>
+		/// Prompts the user to create a <see cref="DatabaseConfiguration"/>.
 		/// </summary>
-		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation</param>
-		/// <returns>A <see cref="Task{TResult}"/> resulting in the new <see cref="DatabaseConfiguration"/></returns>
-		#pragma warning disable CA1502 // TODO: Decomplexify
-		async Task<DatabaseConfiguration> ConfigureDatabase(CancellationToken cancellationToken)
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the new <see cref="DatabaseConfiguration"/>.</returns>
+#pragma warning disable CA1502 // TODO: Decomplexify
+		async ValueTask<DatabaseConfiguration> ConfigureDatabase(CancellationToken cancellationToken)
 		{
 			bool firstTime = true;
 			do
 			{
-				await console.WriteAsync(null, true, cancellationToken).ConfigureAwait(false);
+				await console.WriteAsync(null, true, cancellationToken);
 
 				var databaseConfiguration = new DatabaseConfiguration
 				{
-					DatabaseType = await PromptDatabaseType(firstTime, cancellationToken).ConfigureAwait(false)
+					DatabaseType = await PromptDatabaseType(firstTime, cancellationToken),
 				};
-				firstTime = false;
 
-				string serverAddress = null;
+				string? serverAddress = null;
 				ushort? serverPort = null;
 
-				bool isSqliteDB = databaseConfiguration.DatabaseType == DatabaseType.Sqlite;
+				var definitelyLocalMariaDB = firstTime && internalConfiguration.MariaDBSetup;
+				var isSqliteDB = databaseConfiguration.DatabaseType == DatabaseType.Sqlite;
+				IPHostEntry? serverAddressEntry = null;
 				if (!isSqliteDB)
 					do
 					{
-						await console.WriteAsync(null, true, cancellationToken).ConfigureAwait(false);
-						await console.WriteAsync("Enter the server's address and port [<server>:<port> or <server>] (blank for local): ", false, cancellationToken).ConfigureAwait(false);
-						serverAddress = await console.ReadLineAsync(false, cancellationToken).ConfigureAwait(false);
+						await console.WriteAsync(null, true, cancellationToken);
+						if (definitelyLocalMariaDB)
+						{
+							await console.WriteAsync("Enter the server's port (blank for 3306): ", false, cancellationToken);
+							var enteredPort = await console.ReadLineAsync(false, cancellationToken);
+							if (!String.IsNullOrWhiteSpace(enteredPort) && enteredPort.Trim() != "3306")
+								serverAddress = $"localhost:{enteredPort}";
+						}
+						else
+						{
+							await console.WriteAsync("Enter the server's address and port [<server>:<port> or <server>] (blank for local): ", false, cancellationToken);
+							serverAddress = await console.ReadLineAsync(false, cancellationToken);
+						}
+
 						if (String.IsNullOrWhiteSpace(serverAddress))
 							serverAddress = null;
 						else if (databaseConfiguration.DatabaseType == DatabaseType.SqlServer)
@@ -389,69 +453,101 @@ namespace Tgstation.Server.Host.Setup
 									serverPort = port;
 								else
 								{
-									await console.WriteAsync($"Failed to parse port \"{portString}\", please try again.", true, cancellationToken).ConfigureAwait(false);
+									await console.WriteAsync($"Failed to parse port \"{portString}\", please try again.", true, cancellationToken);
 									continue;
 								}
 							}
 						}
 
-						break;
+						try
+						{
+							if (serverAddress != null)
+							{
+								await console.WriteAsync("Attempting to resolve address...", true, cancellationToken);
+								serverAddressEntry = await Dns.GetHostEntryAsync(serverAddress, cancellationToken);
+							}
+
+							break;
+						}
+						catch (Exception ex)
+						{
+							await console.WriteAsync($"Unable to resolve address: {ex.Message}", true, cancellationToken);
+						}
 					}
 					while (true);
 
-				await console.WriteAsync(null, true, cancellationToken).ConfigureAwait(false);
-				await console.WriteAsync($"Enter the database {(isSqliteDB ? "file path" : "name")} (Can be from previous installation. Otherwise, should not exist): ", false, cancellationToken).ConfigureAwait(false);
+				await console.WriteAsync(null, true, cancellationToken);
+				await console.WriteAsync($"Enter the database {(isSqliteDB ? "file path" : "name")} ({(definitelyLocalMariaDB ? "leave blank for \"tgs\")" : "Can be from previous installation. Otherwise, should not exist")}): ", false, cancellationToken);
 
-				string databaseName;
+				string? databaseName;
 				bool dbExists = false;
 				do
 				{
-					databaseName = await console.ReadLineAsync(false, cancellationToken).ConfigureAwait(false);
+					databaseName = await console.ReadLineAsync(false, cancellationToken);
 					if (!String.IsNullOrWhiteSpace(databaseName))
 					{
 						if (isSqliteDB)
 						{
-							dbExists = await ioManager.FileExists(databaseName, cancellationToken).ConfigureAwait(false);
+							dbExists = await ioManager.FileExists(databaseName, cancellationToken);
 							if (!dbExists)
-								databaseName = await ValidateNonExistantSqliteDBName(databaseName, cancellationToken).ConfigureAwait(false);
+								databaseName = await ValidateNonExistantSqliteDBName(databaseName, cancellationToken);
 						}
 						else
-							dbExists = await PromptYesNo("Does this database already exist? If not, we will attempt to CREATE it. (y/n): ", cancellationToken).ConfigureAwait(false);
+							dbExists = await PromptYesNo(
+								"Does this database already exist? If not, we will attempt to CREATE it.",
+								null,
+								cancellationToken);
 					}
+					else if (definitelyLocalMariaDB)
+						databaseName = "tgs";
 
 					if (String.IsNullOrWhiteSpace(databaseName))
-						await console.WriteAsync("Invalid database name!", true, cancellationToken).ConfigureAwait(false);
+						await console.WriteAsync("Invalid database name!", true, cancellationToken);
 					else
 						break;
 				}
 				while (true);
 
-				bool useWinAuth;
+				var useWinAuth = false;
+				var encrypt = false;
 				if (databaseConfiguration.DatabaseType == DatabaseType.SqlServer && platformIdentifier.IsWindows)
-					useWinAuth = await PromptYesNo("Use Windows Authentication? (y/n): ", cancellationToken).ConfigureAwait(false);
-				else
-					useWinAuth = false;
+				{
+					var defaultResponse = serverAddressEntry?.AddressList.Any(IPAddress.IsLoopback) ?? false
+						? (bool?)true
+						: null;
+					useWinAuth = await PromptYesNo("Use Windows Authentication?", defaultResponse, cancellationToken);
+					encrypt = await PromptYesNo("Use encrypted connection?", false, cancellationToken);
+				}
 
-				await console.WriteAsync(null, true, cancellationToken).ConfigureAwait(false);
+				await console.WriteAsync(null, true, cancellationToken);
 
-				string username = null;
-				string password = null;
+				string? username = null;
+				string? password = null;
 				if (!isSqliteDB)
 					if (!useWinAuth)
 					{
-						await console.WriteAsync("Enter username: ", false, cancellationToken).ConfigureAwait(false);
-						username = await console.ReadLineAsync(false, cancellationToken).ConfigureAwait(false);
-						await console.WriteAsync("Enter password: ", false, cancellationToken).ConfigureAwait(false);
-						password = await console.ReadLineAsync(true, cancellationToken).ConfigureAwait(false);
+						if (definitelyLocalMariaDB)
+						{
+							await console.WriteAsync("Using username: root", true, cancellationToken);
+							username = "root";
+						}
+						else
+						{
+							await console.WriteAsync("Enter username: ", false, cancellationToken);
+							username = await console.ReadLineAsync(false, cancellationToken);
+						}
+
+						await console.WriteAsync("Enter password: ", false, cancellationToken);
+						password = await console.ReadLineAsync(true, cancellationToken);
 					}
 					else
 					{
-						await console.WriteAsync("IMPORTANT: If using the service runner, ensure this computer's LocalSystem account has CREATE DATABASE permissions on the target server!", true, cancellationToken).ConfigureAwait(false);
-						await console.WriteAsync("The account it uses in MSSQL is usually \"NT AUTHORITY\\SYSTEM\" and the role it needs is usually \"dbcreator\".", true, cancellationToken).ConfigureAwait(false);
-						await console.WriteAsync("We'll run a sanity test here, but it won't be indicative of the service's permissions if that is the case", true, cancellationToken).ConfigureAwait(false);
+						await console.WriteAsync("IMPORTANT: If using the service runner, ensure this computer's LocalSystem account has CREATE DATABASE permissions on the target server!", true, cancellationToken);
+						await console.WriteAsync("The account it uses in MSSQL is usually \"NT AUTHORITY\\SYSTEM\" and the role it needs is usually \"dbcreator\".", true, cancellationToken);
+						await console.WriteAsync("We'll run a sanity test here, but it won't be indicative of the service's permissions if that is the case", true, cancellationToken);
 					}
 
-				await console.WriteAsync(null, true, cancellationToken).ConfigureAwait(false);
+				await console.WriteAsync(null, true, cancellationToken);
 
 				DbConnection testConnection;
 				void CreateTestConnection(string connectionString) =>
@@ -466,7 +562,8 @@ namespace Tgstation.Server.Host.Setup
 							var csb = new SqlConnectionStringBuilder
 							{
 								ApplicationName = assemblyInformationProvider.VersionPrefix,
-								DataSource = serverAddress ?? "(local)"
+								DataSource = serverAddress ?? "(local)",
+								Encrypt = encrypt,
 							};
 
 							if (useWinAuth)
@@ -476,6 +573,8 @@ namespace Tgstation.Server.Host.Setup
 								csb.UserID = username;
 								csb.Password = password;
 							}
+
+							csb.Encrypt = encrypt;
 
 							CreateTestConnection(csb.ConnectionString);
 							csb.InitialCatalog = databaseName;
@@ -491,7 +590,7 @@ namespace Tgstation.Server.Host.Setup
 							{
 								Server = serverAddress ?? "127.0.0.1",
 								UserID = username,
-								Password = password
+								Password = password,
 							};
 
 							if (serverPort.HasValue)
@@ -508,10 +607,12 @@ namespace Tgstation.Server.Host.Setup
 							var csb = new SqliteConnectionStringBuilder
 							{
 								DataSource = databaseName,
-								Mode = dbExists ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWriteCreate
+								Mode = dbExists ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWriteCreate,
 							};
 
 							CreateTestConnection(csb.ConnectionString);
+
+							csb.Mode = SqliteOpenMode.ReadWriteCreate;
 							databaseConfiguration.ConnectionString = csb.ConnectionString;
 						}
 
@@ -523,7 +624,7 @@ namespace Tgstation.Server.Host.Setup
 								ApplicationName = assemblyInformationProvider.VersionPrefix,
 								Host = serverAddress ?? "127.0.0.1",
 								Password = password,
-								Username = username
+								Username = username,
 							};
 
 							if (serverPort.HasValue)
@@ -541,7 +642,7 @@ namespace Tgstation.Server.Host.Setup
 
 				try
 				{
-					await TestDatabaseConnection(testConnection, databaseConfiguration, databaseName, dbExists, cancellationToken).ConfigureAwait(false);
+					await TestDatabaseConnection(testConnection, databaseConfiguration, databaseName, dbExists, cancellationToken);
 
 					return databaseConfiguration;
 				}
@@ -551,32 +652,37 @@ namespace Tgstation.Server.Host.Setup
 				}
 				catch (Exception e)
 				{
-					await console.WriteAsync(e.Message, true, cancellationToken).ConfigureAwait(false);
-					await console.WriteAsync(null, true, cancellationToken).ConfigureAwait(false);
-					await console.WriteAsync("Retrying database configuration...", true, cancellationToken).ConfigureAwait(false);
+					await console.WriteAsync(e.Message, true, cancellationToken);
+					await console.WriteAsync(null, true, cancellationToken);
+					await console.WriteAsync("Retrying database configuration...", true, cancellationToken);
+
+					if (definitelyLocalMariaDB)
+						await console.WriteAsync("No longer assuming MariaDB is the target.", true, cancellationToken);
+
+					firstTime = false;
 				}
 			}
 			while (true);
 		}
-		#pragma warning restore CA1502
+#pragma warning restore CA1502
 
 		/// <summary>
-		/// Prompts the user to create a <see cref="GeneralConfiguration"/>
+		/// Prompts the user to create a <see cref="GeneralConfiguration"/>.
 		/// </summary>
-		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation</param>
-		/// <returns>A <see cref="Task{TResult}"/> resulting in the new <see cref="GeneralConfiguration"/></returns>
-		async Task<GeneralConfiguration> ConfigureGeneral(CancellationToken cancellationToken)
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the new <see cref="GeneralConfiguration"/>.</returns>
+		async ValueTask<GeneralConfiguration> ConfigureGeneral(CancellationToken cancellationToken)
 		{
 			var newGeneralConfiguration = new GeneralConfiguration
 			{
-				SetupWizardMode = SetupWizardMode.Never
+				SetupWizardMode = SetupWizardMode.Never,
 			};
 
 			do
 			{
-				await console.WriteAsync(null, true, cancellationToken).ConfigureAwait(false);
-				await console.WriteAsync(String.Format(CultureInfo.InvariantCulture, "Minimum database user password length (leave blank for default of {0}): ", newGeneralConfiguration.MinimumPasswordLength), false, cancellationToken).ConfigureAwait(false);
-				var passwordLengthString = await console.ReadLineAsync(false, cancellationToken).ConfigureAwait(false);
+				await console.WriteAsync(null, true, cancellationToken);
+				await console.WriteAsync(String.Format(CultureInfo.InvariantCulture, "Minimum database user password length (leave blank for default of {0}): ", newGeneralConfiguration.MinimumPasswordLength), false, cancellationToken);
+				var passwordLengthString = await console.ReadLineAsync(false, cancellationToken);
 				if (String.IsNullOrWhiteSpace(passwordLengthString))
 					break;
 				if (UInt32.TryParse(passwordLengthString, out var passwordLength) && passwordLength >= 0)
@@ -585,15 +691,15 @@ namespace Tgstation.Server.Host.Setup
 					break;
 				}
 
-				await console.WriteAsync("Please enter a positive integer!", true, cancellationToken).ConfigureAwait(false);
+				await console.WriteAsync("Please enter a positive integer!", true, cancellationToken);
 			}
 			while (true);
 
 			do
 			{
-				await console.WriteAsync(null, true, cancellationToken).ConfigureAwait(false);
-				await console.WriteAsync(String.Format(CultureInfo.InvariantCulture, "Default timeout for sending and receiving BYOND topics (ms, 0 for infinite, leave blank for default of {0}): ", newGeneralConfiguration.ByondTopicTimeout), false, cancellationToken).ConfigureAwait(false);
-				var topicTimeoutString = await console.ReadLineAsync(false, cancellationToken).ConfigureAwait(false);
+				await console.WriteAsync(null, true, cancellationToken);
+				await console.WriteAsync(String.Format(CultureInfo.InvariantCulture, "Default timeout for sending and receiving BYOND topics (ms, 0 for infinite, leave blank for default of {0}): ", newGeneralConfiguration.ByondTopicTimeout), false, cancellationToken);
+				var topicTimeoutString = await console.ReadLineAsync(false, cancellationToken);
 				if (String.IsNullOrWhiteSpace(topicTimeoutString))
 					break;
 				if (UInt32.TryParse(topicTimeoutString, out var topicTimeout) && topicTimeout >= 0)
@@ -602,37 +708,39 @@ namespace Tgstation.Server.Host.Setup
 					break;
 				}
 
-				await console.WriteAsync("Please enter a positive integer!", true, cancellationToken).ConfigureAwait(false);
+				await console.WriteAsync("Please enter a positive integer!", true, cancellationToken);
 			}
 			while (true);
 
-			await console.WriteAsync(null, true, cancellationToken).ConfigureAwait(false);
-			await console.WriteAsync("Enter a GitHub personal access token to bypass some rate limits (this is optional and does not require any scopes)", true, cancellationToken).ConfigureAwait(false);
-			await console.WriteAsync("GitHub personal access token: ", false, cancellationToken).ConfigureAwait(false);
-			newGeneralConfiguration.GitHubAccessToken = await console.ReadLineAsync(true, cancellationToken).ConfigureAwait(false);
+			await console.WriteAsync(null, true, cancellationToken);
+			await console.WriteAsync("Enter a classic GitHub personal access token to bypass some rate limits (this is optional and does not require any scopes)", true, cancellationToken);
+			await console.WriteAsync("GitHub personal access token: ", false, cancellationToken);
+			newGeneralConfiguration.GitHubAccessToken = await console.ReadLineAsync(true, cancellationToken);
 			if (String.IsNullOrWhiteSpace(newGeneralConfiguration.GitHubAccessToken))
 				newGeneralConfiguration.GitHubAccessToken = null;
+
+			newGeneralConfiguration.HostApiDocumentation = await PromptYesNo("Host API Documentation?", false, cancellationToken);
 
 			return newGeneralConfiguration;
 		}
 
 		/// <summary>
-		/// Prompts the user to create a <see cref="FileLoggingConfiguration"/>
+		/// Prompts the user to create a <see cref="FileLoggingConfiguration"/>.
 		/// </summary>
-		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation</param>
-		/// <returns>A <see cref="Task{TResult}"/> resulting in the new <see cref="FileLoggingConfiguration"/></returns>
-		async Task<FileLoggingConfiguration> ConfigureLogging(CancellationToken cancellationToken)
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the new <see cref="FileLoggingConfiguration"/>.</returns>
+		async ValueTask<FileLoggingConfiguration> ConfigureLogging(CancellationToken cancellationToken)
 		{
 			var fileLoggingConfiguration = new FileLoggingConfiguration();
-			await console.WriteAsync(null, true, cancellationToken).ConfigureAwait(false);
-			fileLoggingConfiguration.Disable = !await PromptYesNo("Enable file logging? (y/n): ", cancellationToken).ConfigureAwait(false);
+			await console.WriteAsync(null, true, cancellationToken);
+			fileLoggingConfiguration.Disable = !await PromptYesNo("Enable file logging?", true, cancellationToken);
 
 			if (!fileLoggingConfiguration.Disable)
 			{
 				do
 				{
-					await console.WriteAsync("Log file directory path (leave blank for default): ", false, cancellationToken).ConfigureAwait(false);
-					fileLoggingConfiguration.Directory = await console.ReadLineAsync(false, cancellationToken).ConfigureAwait(false);
+					await console.WriteAsync("Log file directory path (leave blank for default): ", false, cancellationToken);
+					fileLoggingConfiguration.Directory = await console.ReadLineAsync(false, cancellationToken);
 					if (String.IsNullOrWhiteSpace(fileLoggingConfiguration.Directory))
 					{
 						fileLoggingConfiguration.Directory = null;
@@ -640,16 +748,16 @@ namespace Tgstation.Server.Host.Setup
 					}
 
 					// test a write of it
-					await console.WriteAsync(null, true, cancellationToken).ConfigureAwait(false);
-					await console.WriteAsync("Testing directory access...", true, cancellationToken).ConfigureAwait(false);
+					await console.WriteAsync(null, true, cancellationToken);
+					await console.WriteAsync("Testing directory access...", true, cancellationToken);
 					try
 					{
-						await ioManager.CreateDirectory(fileLoggingConfiguration.Directory, cancellationToken).ConfigureAwait(false);
+						await ioManager.CreateDirectory(fileLoggingConfiguration.Directory, cancellationToken);
 						var testFile = ioManager.ConcatPath(fileLoggingConfiguration.Directory, String.Format(CultureInfo.InvariantCulture, "WizardAccesTest.{0}.deleteme", Guid.NewGuid()));
-						await ioManager.WriteAllBytes(testFile, Array.Empty<byte>(), cancellationToken).ConfigureAwait(false);
+						await ioManager.WriteAllBytes(testFile, Array.Empty<byte>(), cancellationToken);
 						try
 						{
-							await ioManager.DeleteFile(testFile, cancellationToken).ConfigureAwait(false);
+							await ioManager.DeleteFile(testFile, cancellationToken);
 						}
 						catch (OperationCanceledException)
 						{
@@ -657,9 +765,9 @@ namespace Tgstation.Server.Host.Setup
 						}
 						catch (Exception e)
 						{
-							await console.WriteAsync(String.Format(CultureInfo.InvariantCulture, "Error deleting test log file: {0}", testFile), true, cancellationToken).ConfigureAwait(false);
-							await console.WriteAsync(e.Message, true, cancellationToken).ConfigureAwait(false);
-							await console.WriteAsync(null, true, cancellationToken).ConfigureAwait(false);
+							await console.WriteAsync(String.Format(CultureInfo.InvariantCulture, "Error deleting test log file: {0}", testFile), true, cancellationToken);
+							await console.WriteAsync(e.Message, true, cancellationToken);
+							await console.WriteAsync(null, true, cancellationToken);
 						}
 
 						break;
@@ -670,54 +778,109 @@ namespace Tgstation.Server.Host.Setup
 					}
 					catch (Exception e)
 					{
-						await console.WriteAsync(e.Message, true, cancellationToken).ConfigureAwait(false);
-						await console.WriteAsync(null, true, cancellationToken).ConfigureAwait(false);
-						await console.WriteAsync("Please verify the path is valid and you have access to it!", true, cancellationToken).ConfigureAwait(false);
+						await console.WriteAsync(e.Message, true, cancellationToken);
+						await console.WriteAsync(null, true, cancellationToken);
+						await console.WriteAsync("Please verify the path is valid and you have access to it!", true, cancellationToken);
 					}
 				}
 				while (true);
 
-				async Task<LogLevel?> PromptLogLevel(string question)
+				async ValueTask<LogLevel?> PromptLogLevel(string question)
 				{
 					do
 					{
-						await console.WriteAsync(null, true, cancellationToken).ConfigureAwait(false);
-						await console.WriteAsync(question, true, cancellationToken).ConfigureAwait(false);
-						await console.WriteAsync(String.Format(CultureInfo.InvariantCulture, "Enter one of {0}/{1}/{2}/{3}/{4}/{5} (leave blank for default): ", nameof(LogLevel.Trace), nameof(LogLevel.Debug), nameof(LogLevel.Information), nameof(LogLevel.Warning), nameof(LogLevel.Error), nameof(LogLevel.Critical)), false, cancellationToken).ConfigureAwait(false);
-						var responseString = await console.ReadLineAsync(false, cancellationToken).ConfigureAwait(false);
+						await console.WriteAsync(null, true, cancellationToken);
+						await console.WriteAsync(question, true, cancellationToken);
+						await console.WriteAsync(String.Format(CultureInfo.InvariantCulture, "Enter one of {0}/{1}/{2}/{3}/{4}/{5} (leave blank for default): ", nameof(LogLevel.Trace), nameof(LogLevel.Debug), nameof(LogLevel.Information), nameof(LogLevel.Warning), nameof(LogLevel.Error), nameof(LogLevel.Critical)), false, cancellationToken);
+						var responseString = await console.ReadLineAsync(false, cancellationToken);
 						if (String.IsNullOrWhiteSpace(responseString))
 							return null;
 						if (Enum.TryParse<LogLevel>(responseString, out var logLevel) && logLevel != LogLevel.None)
 							return logLevel;
-						await console.WriteAsync("Invalid log level!", true, cancellationToken).ConfigureAwait(false);
+						await console.WriteAsync("Invalid log level!", true, cancellationToken);
 					}
 					while (true);
 				}
 
-				fileLoggingConfiguration.LogLevel = await PromptLogLevel(String.Format(CultureInfo.InvariantCulture, "Enter the level limit for normal logs (default {0}).", fileLoggingConfiguration.LogLevel)).ConfigureAwait(false) ?? fileLoggingConfiguration.LogLevel;
-				fileLoggingConfiguration.MicrosoftLogLevel = await PromptLogLevel(String.Format(CultureInfo.InvariantCulture, "Enter the level limit for Microsoft logs (VERY verbose, default {0}).", fileLoggingConfiguration.MicrosoftLogLevel)).ConfigureAwait(false) ?? fileLoggingConfiguration.MicrosoftLogLevel;
+				fileLoggingConfiguration.LogLevel = await PromptLogLevel(String.Format(CultureInfo.InvariantCulture, "Enter the level limit for normal logs (default {0}).", fileLoggingConfiguration.LogLevel)) ?? fileLoggingConfiguration.LogLevel;
+				fileLoggingConfiguration.MicrosoftLogLevel = await PromptLogLevel(String.Format(CultureInfo.InvariantCulture, "Enter the level limit for Microsoft logs (VERY verbose, default {0}).", fileLoggingConfiguration.MicrosoftLogLevel)) ?? fileLoggingConfiguration.MicrosoftLogLevel;
 			}
 
 			return fileLoggingConfiguration;
 		}
 
 		/// <summary>
-		/// Prompts the user to create a <see cref="ControlPanelConfiguration"/>
+		/// Prompts the user to create a <see cref="ElasticsearchConfiguration"/>.
 		/// </summary>
-		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation</param>
-		/// <returns>A <see cref="Task{TResult}"/> resulting in the new <see cref="ControlPanelConfiguration"/></returns>
-		async Task<ControlPanelConfiguration> ConfigureControlPanel(CancellationToken cancellationToken)
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the new <see cref="ElasticsearchConfiguration"/>.</returns>
+		async ValueTask<ElasticsearchConfiguration> ConfigureElasticsearch(CancellationToken cancellationToken)
+		{
+			var elasticsearchConfiguration = new ElasticsearchConfiguration();
+			await console.WriteAsync(null, true, cancellationToken);
+			elasticsearchConfiguration.Enable = await PromptYesNo("Enable logging to an external ElasticSearch server?", false, cancellationToken);
+
+			if (elasticsearchConfiguration.Enable)
+			{
+				do
+				{
+					await console.WriteAsync("ElasticSearch server endpoint (Include protocol and port, leave blank for http://127.0.0.1:9200): ", false, cancellationToken);
+					var hostString = await console.ReadLineAsync(false, cancellationToken);
+					if (String.IsNullOrWhiteSpace(hostString))
+						hostString = "http://127.0.0.1:9200";
+
+					if (Uri.TryCreate(hostString, UriKind.Absolute, out var host))
+					{
+						elasticsearchConfiguration.Host = host;
+						break;
+					}
+
+					await console.WriteAsync("Invalid URI!", true, cancellationToken);
+				}
+				while (true);
+
+				do
+				{
+					await console.WriteAsync("Enter Elasticsearch username: ", false, cancellationToken);
+					elasticsearchConfiguration.Username = await console.ReadLineAsync(false, cancellationToken);
+					if (!String.IsNullOrWhiteSpace(elasticsearchConfiguration.Username))
+						break;
+				}
+				while (true);
+
+				do
+				{
+					await console.WriteAsync("Enter password: ", false, cancellationToken);
+					elasticsearchConfiguration.Password = await console.ReadLineAsync(true, cancellationToken);
+					if (!String.IsNullOrWhiteSpace(elasticsearchConfiguration.Username))
+						break;
+				}
+				while (true);
+			}
+
+			return elasticsearchConfiguration;
+		}
+
+		/// <summary>
+		/// Prompts the user to create a <see cref="ControlPanelConfiguration"/>.
+		/// </summary>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the new <see cref="ControlPanelConfiguration"/>.</returns>
+		async ValueTask<ControlPanelConfiguration> ConfigureControlPanel(CancellationToken cancellationToken)
 		{
 			var config = new ControlPanelConfiguration
 			{
-				Enable = await PromptYesNo("Enable the web control panel (Incomplete)? (y/n): ", cancellationToken).ConfigureAwait(false),
-				AllowAnyOrigin = await PromptYesNo("Allow web control panels hosted elsewhere to access the server? (Access-Control-Allow-Origin: *) (y/n): ", cancellationToken).ConfigureAwait(false)
+				Enable = await PromptYesNo("Enable the web control panel?", true, cancellationToken),
+				AllowAnyOrigin = await PromptYesNo(
+					"Allow web control panels hosted elsewhere to access the server? (Access-Control-Allow-Origin: *)",
+					true,
+					cancellationToken),
 			};
 
 			if (!config.AllowAnyOrigin)
 			{
-				await console.WriteAsync("Enter a comma seperated list of CORS allowed origins (optional): ", false, cancellationToken).ConfigureAwait(false);
-				var commaSeperatedOrigins = await console.ReadLineAsync(false, cancellationToken).ConfigureAwait(false);
+				await console.WriteAsync("Enter a comma seperated list of CORS allowed origins (optional): ", false, cancellationToken);
+				var commaSeperatedOrigins = await console.ReadLineAsync(false, cancellationToken);
 				if (!String.IsNullOrWhiteSpace(commaSeperatedOrigins))
 				{
 					var splits = commaSeperatedOrigins.Split(',');
@@ -729,88 +892,200 @@ namespace Tgstation.Server.Host.Setup
 		}
 
 		/// <summary>
-		/// Saves a given <see cref="Configuration"/> set to <paramref name="userConfigFileName"/>
+		/// Prompts the user to create a <see cref="SwarmConfiguration"/>.
 		/// </summary>
-		/// <param name="userConfigFileName">The file to save the <see cref="Configuration"/> to</param>
-		/// <param name="hostingPort">The hosting port to save</param>
-		/// <param name="databaseConfiguration">The <see cref="DatabaseConfiguration"/> to save</param>
-		/// <param name="newGeneralConfiguration">The <see cref="GeneralConfiguration"/> to save</param>
-		/// <param name="fileLoggingConfiguration">The <see cref="FileLoggingConfiguration"/> to save</param>
-		/// <param name="controlPanelConfiguration">The <see cref="ControlPanelConfiguration"/> to save</param>
-		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation</param>
-		/// <returns>A <see cref="Task"/> representing the running operation</returns>
-		async Task SaveConfiguration(string userConfigFileName, ushort? hostingPort, DatabaseConfiguration databaseConfiguration, GeneralConfiguration newGeneralConfiguration, FileLoggingConfiguration fileLoggingConfiguration, ControlPanelConfiguration controlPanelConfiguration, CancellationToken cancellationToken)
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the new <see cref="SwarmConfiguration"/>.</returns>
+		async ValueTask<SwarmConfiguration?> ConfigureSwarm(CancellationToken cancellationToken)
 		{
-			await console.WriteAsync(String.Format(CultureInfo.InvariantCulture, "Configuration complete! Saving to {0}", userConfigFileName), true, cancellationToken).ConfigureAwait(false);
+			var enable = await PromptYesNo("Enable swarm mode?", false, cancellationToken);
+			if (!enable)
+				return null;
 
+			string identifer;
+			do
+			{
+				await console.WriteAsync("Enter this server's identifer: ", false, cancellationToken);
+				identifer = await console.ReadLineAsync(false, cancellationToken);
+			}
+			while (String.IsNullOrWhiteSpace(identifer));
+
+			async ValueTask<Uri> ParseAddress(string question)
+			{
+				var first = true;
+				Uri? address;
+				do
+				{
+					if (first)
+						first = false;
+					else
+						await console.WriteAsync("Invalid address!", true, cancellationToken);
+
+					await console.WriteAsync(question, false, cancellationToken);
+					var addressString = await console.ReadLineAsync(false, cancellationToken);
+					if (Uri.TryCreate(addressString, UriKind.Absolute, out address)
+						&& address.Scheme != Uri.UriSchemeHttp
+						&& address.Scheme != Uri.UriSchemeHttps)
+						address = null;
+				}
+				while (address == null);
+
+				return address;
+			}
+
+			var address = await ParseAddress("Enter this server's INTERNAL http(s) address: ");
+			var publicAddress = await ParseAddress("Enter this server's PUBLIC https(s) address: ");
+			string privateKey;
+			do
+			{
+				await console.WriteAsync("Enter the swarm private key: ", false, cancellationToken);
+				privateKey = await console.ReadLineAsync(false, cancellationToken);
+			}
+			while (String.IsNullOrWhiteSpace(privateKey));
+
+			var controller = await PromptYesNo("Is this server the swarm's controller? (y/n): ", null, cancellationToken);
+			Uri? controllerAddress = null;
+			if (!controller)
+				controllerAddress = await ParseAddress("Enter the swarm controller's HTTP(S) address: ");
+
+			return new SwarmConfiguration
+			{
+				Address = address,
+				PublicAddress = publicAddress,
+				ControllerAddress = controllerAddress,
+				Identifier = identifer,
+				PrivateKey = privateKey,
+			};
+		}
+
+		/// <summary>
+		/// Saves a given <see cref="Configuration"/> set to <paramref name="userConfigFileName"/>.
+		/// </summary>
+		/// <param name="userConfigFileName">The file to save the <see cref="Configuration"/> to.</param>
+		/// <param name="hostingPort">The hosting port to save.</param>
+		/// <param name="databaseConfiguration">The <see cref="DatabaseConfiguration"/> to save.</param>
+		/// <param name="newGeneralConfiguration">The <see cref="GeneralConfiguration"/> to save.</param>
+		/// <param name="fileLoggingConfiguration">The <see cref="FileLoggingConfiguration"/> to save.</param>
+		/// <param name="elasticsearchConfiguration">The <see cref="ElasticsearchConfiguration"/> to save.</param>
+		/// <param name="controlPanelConfiguration">The <see cref="ControlPanelConfiguration"/> to save.</param>
+		/// <param name="swarmConfiguration">The <see cref="SwarmConfiguration"/> to save.</param>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="ValueTask"/> representing the running operation.</returns>
+		async ValueTask SaveConfiguration(
+			string userConfigFileName,
+			ushort? hostingPort,
+			DatabaseConfiguration databaseConfiguration,
+			GeneralConfiguration newGeneralConfiguration,
+			FileLoggingConfiguration? fileLoggingConfiguration,
+			ElasticsearchConfiguration? elasticsearchConfiguration,
+			ControlPanelConfiguration controlPanelConfiguration,
+			SwarmConfiguration? swarmConfiguration,
+			CancellationToken cancellationToken)
+		{
 			newGeneralConfiguration.ApiPort = hostingPort ?? GeneralConfiguration.DefaultApiPort;
 			newGeneralConfiguration.ConfigVersion = GeneralConfiguration.CurrentConfigVersion;
-			var map = new Dictionary<string, object>()
+			var map = new Dictionary<string, object?>()
 			{
 				{ DatabaseConfiguration.Section, databaseConfiguration },
 				{ GeneralConfiguration.Section, newGeneralConfiguration },
 				{ FileLoggingConfiguration.Section, fileLoggingConfiguration },
-				{ ControlPanelConfiguration.Section, controlPanelConfiguration }
+				{ ElasticsearchConfiguration.Section, elasticsearchConfiguration },
+				{ ControlPanelConfiguration.Section, controlPanelConfiguration },
+				{ SwarmConfiguration.Section, swarmConfiguration },
 			};
 
-			var json = JsonConvert.SerializeObject(map, Formatting.Indented);
-			var configBytes = Encoding.UTF8.GetBytes(json);
+			var versionConverter = new VersionConverter();
+			var builder = new SerializerBuilder()
+				.WithTypeConverter(versionConverter);
+
+			if (userConfigFileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+				builder.JsonCompatible();
+
+			var serializer = new SerializerBuilder()
+				.WithTypeConverter(versionConverter)
+				.Build();
+
+			var serializedYaml = serializer.Serialize(map);
+
+			// big hack, but, prevent the default control panel channel from being overridden
+			serializedYaml = serializedYaml.Replace(
+				$"\n  {nameof(ControlPanelConfiguration.Channel)}: ",
+				String.Empty,
+				StringComparison.Ordinal)
+				.Replace("\r", String.Empty, StringComparison.Ordinal);
+
+			var configBytes = Encoding.UTF8.GetBytes(serializedYaml);
 
 			try
 			{
-				await ioManager.WriteAllBytes(userConfigFileName, configBytes, cancellationToken).ConfigureAwait(false);
+				await ioManager.WriteAllBytes(
+					userConfigFileName,
+					configBytes,
+					cancellationToken);
+
+				postSetupServices.ReloadRequired = true;
 			}
-			catch (OperationCanceledException)
+			catch (Exception e) when (e is not OperationCanceledException)
 			{
-				throw;
-			}
-			catch (Exception e)
-			{
-				await console.WriteAsync(e.Message, true, cancellationToken).ConfigureAwait(false);
-				await console.WriteAsync(null, true, cancellationToken).ConfigureAwait(false);
-				await console.WriteAsync("For your convienence, here's the json we tried to write out:", true, cancellationToken).ConfigureAwait(false);
-				await console.WriteAsync(null, true, cancellationToken).ConfigureAwait(false);
-				await console.WriteAsync(json, true, cancellationToken).ConfigureAwait(false);
-				await console.WriteAsync(null, true, cancellationToken).ConfigureAwait(false);
-				await console.WriteAsync("Press any key to exit...", true, cancellationToken).ConfigureAwait(false);
-				await console.PressAnyKeyAsync(cancellationToken).ConfigureAwait(false);
+				await console.WriteAsync(e.Message, true, cancellationToken);
+				await console.WriteAsync(null, true, cancellationToken);
+				await console.WriteAsync("For your convienence, here's the yaml we tried to write out:", true, cancellationToken);
+				await console.WriteAsync(null, true, cancellationToken);
+				await console.WriteAsync(serializedYaml, true, cancellationToken);
+				await console.WriteAsync(null, true, cancellationToken);
+				await console.WriteAsync("Press any key to exit...", true, cancellationToken);
+				await console.PressAnyKeyAsync(cancellationToken);
 				throw new OperationCanceledException();
 			}
 		}
 
 		/// <summary>
-		/// Runs the <see cref="SetupWizard"/>
+		/// Runs the <see cref="SetupWizard"/>.
 		/// </summary>
-		/// <param name="userConfigFileName">The path to the settings json to build</param>
-		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation</param>
-		/// <returns>A <see cref="Task"/> representing the running operation</returns>
-		async Task RunWizard(string userConfigFileName, CancellationToken cancellationToken)
+		/// <param name="userConfigFileName">The path to the settings json to build.</param>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="ValueTask"/> representing the running operation.</returns>
+		async ValueTask RunWizard(string userConfigFileName, CancellationToken cancellationToken)
 		{
 			// welcome message
-			await console.WriteAsync("Welcome to tgstation-server 4!", true, cancellationToken).ConfigureAwait(false);
-			await console.WriteAsync("This wizard will help you configure your server.", true, cancellationToken).ConfigureAwait(false);
+			await console.WriteAsync($"Welcome to {Constants.CanonicalPackageName}!", true, cancellationToken);
+			await console.WriteAsync("This wizard will help you configure your server.", true, cancellationToken);
 
-			var hostingPort = await PromptForHostingPort(cancellationToken).ConfigureAwait(false);
+			var hostingPort = await PromptForHostingPort(cancellationToken);
 
-			var databaseConfiguration = await ConfigureDatabase(cancellationToken).ConfigureAwait(false);
+			var databaseConfiguration = await ConfigureDatabase(cancellationToken);
 
-			var newGeneralConfiguration = await ConfigureGeneral(cancellationToken).ConfigureAwait(false);
+			var newGeneralConfiguration = await ConfigureGeneral(cancellationToken);
 
-			var fileLoggingConfiguration = await ConfigureLogging(cancellationToken).ConfigureAwait(false);
+			var fileLoggingConfiguration = await ConfigureLogging(cancellationToken);
 
-			var controlPanelConfiguration = await ConfigureControlPanel(cancellationToken).ConfigureAwait(false);
+			var elasticSearchConfiguration = await ConfigureElasticsearch(cancellationToken);
 
-			await console.WriteAsync(null, true, cancellationToken).ConfigureAwait(false);
+			var controlPanelConfiguration = await ConfigureControlPanel(cancellationToken);
 
-			await SaveConfiguration(userConfigFileName, hostingPort, databaseConfiguration, newGeneralConfiguration, fileLoggingConfiguration, controlPanelConfiguration, cancellationToken).ConfigureAwait(false);
+			var swarmConfiguration = await ConfigureSwarm(cancellationToken);
+
+			await console.WriteAsync(null, true, cancellationToken);
+			await console.WriteAsync(String.Format(CultureInfo.InvariantCulture, "Configuration complete! Saving to {0}", userConfigFileName), true, cancellationToken);
+
+			await SaveConfiguration(
+				userConfigFileName,
+				hostingPort,
+				databaseConfiguration,
+				newGeneralConfiguration,
+				fileLoggingConfiguration,
+				elasticSearchConfiguration,
+				controlPanelConfiguration,
+				swarmConfiguration,
+				cancellationToken);
 		}
 
 		/// <summary>
 		/// Check if it should and run the <see cref="SetupWizard"/> if necessary.
 		/// </summary>
 		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
-		/// <returns>A <see cref="Task"/> representing the running operation.</returns>
-		async Task CheckRunWizard(CancellationToken cancellationToken)
+		/// <returns>A <see cref="ValueTask"/> representing the running operation.</returns>
+		async ValueTask CheckRunWizard(CancellationToken cancellationToken)
 		{
 			var setupWizardMode = generalConfiguration.SetupWizardMode;
 			if (setupWizardMode == SetupWizardMode.Never)
@@ -824,29 +1099,51 @@ namespace Tgstation.Server.Host.Setup
 				return;
 			}
 
-			var userConfigFileName = String.Format(CultureInfo.InvariantCulture, "appsettings.{0}.json", hostingEnvironment.EnvironmentName);
+			var userConfigFileName = ioManager.ConcatPath(
+				internalConfiguration.AppSettingsBasePath,
+				$"{ServerFactory.AppSettings}.{hostingEnvironment.EnvironmentName}.yml");
 
 			async Task HandleSetupCancel()
 			{
 				// DCTx2: Operation should always run
-				await console.WriteAsync(String.Empty, true, default).ConfigureAwait(false);
-				await console.WriteAsync("Aborting setup!", true, default).ConfigureAwait(false);
+				await console.WriteAsync(String.Empty, true, default);
+				await console.WriteAsync("Aborting setup!", true, default);
+			}
+
+			Task finalTask = Task.CompletedTask;
+			string? originalConsoleTitle = null;
+			void SetConsoleTitle()
+			{
+				if (originalConsoleTitle != null)
+					return;
+
+				originalConsoleTitle = console.Title;
+				console.SetTitle($"{assemblyInformationProvider.VersionString} Setup Wizard");
 			}
 
 			// Link passed cancellationToken with cancel key press
-			Task finalTask = Task.CompletedTask;
 			using (var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, console.CancelKeyPress))
 			using ((cancellationToken = cts.Token).Register(() => finalTask = HandleSetupCancel()))
 				try
 				{
-					var exists = await ioManager.FileExists(userConfigFileName, cancellationToken).ConfigureAwait(false);
+					var exists = await ioManager.FileExists(userConfigFileName, cancellationToken);
+					if (!exists)
+					{
+						var legacyJsonFileName = $"appsettings.{hostingEnvironment.EnvironmentName}.json";
+						exists = await ioManager.FileExists(legacyJsonFileName, cancellationToken);
+						if (exists)
+							userConfigFileName = legacyJsonFileName;
+					}
 
 					bool shouldRunBasedOnAutodetect;
 					if (exists)
 					{
-						var bytes = await ioManager.ReadAllBytes(userConfigFileName, cancellationToken).ConfigureAwait(false);
+						var bytes = await ioManager.ReadAllBytes(userConfigFileName, cancellationToken);
 						var contents = Encoding.UTF8.GetString(bytes);
-						var existingConfigIsEmpty = String.IsNullOrWhiteSpace(contents) || contents.Trim() == "{}";
+						var lines = contents.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+						var existingConfigIsEmpty = lines
+							.Select(line => line.Trim())
+							.All(line => line[0] == '#' || line == "{}" || line.Length == 0);
 						shouldRunBasedOnAutodetect = existingConfigIsEmpty;
 					}
 					else
@@ -856,34 +1153,63 @@ namespace Tgstation.Server.Host.Setup
 					{
 						if (forceRun)
 						{
-							await console.WriteAsync(String.Format(CultureInfo.InvariantCulture, "The configuration settings are requesting the setup wizard be run, but you already appear to have a configuration file ({0})!", userConfigFileName), true, cancellationToken).ConfigureAwait(false);
+							SetConsoleTitle();
+							await console.WriteAsync(String.Format(CultureInfo.InvariantCulture, "The configuration settings are requesting the setup wizard be run, but you already appear to have a configuration file ({0})!", userConfigFileName), true, cancellationToken);
 
-							forceRun = await PromptYesNo("Continue running setup wizard? (y/n): ", cancellationToken).ConfigureAwait(false);
+							forceRun = await PromptYesNo("Continue running setup wizard?", false, cancellationToken);
 						}
 
 						if (!forceRun)
 							return;
 					}
 
-					// flush the logs to prevent console conflicts
-					await asyncDelayer.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
+					SetConsoleTitle();
 
-					await RunWizard(userConfigFileName, cancellationToken).ConfigureAwait(false);
+					if (!String.IsNullOrEmpty(internalConfiguration.MariaDBDefaultRootPassword))
+					{
+						// we can generate the whole thing.
+						var csb = new MySqlConnectionStringBuilder
+						{
+							Server = "127.0.0.1",
+							UserID = "root",
+							Password = internalConfiguration.MariaDBDefaultRootPassword,
+							Database = "tgs",
+						};
+
+						await SaveConfiguration(
+							userConfigFileName,
+							null,
+							new DatabaseConfiguration
+							{
+								ConnectionString = csb.ConnectionString,
+								DatabaseType = DatabaseType.MariaDB,
+								ServerVersion = MasterVersionsAttribute.Instance.RawMariaDBRedistVersion,
+							},
+							new GeneralConfiguration(),
+							null,
+							null,
+							new ControlPanelConfiguration
+							{
+								Enable = true,
+								AllowAnyOrigin = true,
+							},
+							null,
+							cancellationToken);
+					}
+					else
+					{
+						// flush the logs to prevent console conflicts
+						await asyncDelayer.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+
+						await RunWizard(userConfigFileName, cancellationToken);
+					}
 				}
 				finally
 				{
-					await finalTask.ConfigureAwait(false);
+					await finalTask;
+					if (originalConsoleTitle != null)
+						console.SetTitle(originalConsoleTitle);
 				}
 		}
-
-		/// <inheritdoc />
-		public async Task StartAsync(CancellationToken cancellationToken)
-		{
-			await CheckRunWizard(cancellationToken).ConfigureAwait(false);
-			applicationLifetime.StopApplication();
-		}
-
-		/// <inheritdoc />
-		public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 	}
 }

@@ -1,5 +1,6 @@
-﻿using Microsoft.EntityFrameworkCore.Migrations;
-using System;
+﻿using System;
+
+using Microsoft.EntityFrameworkCore.Migrations;
 
 namespace Tgstation.Server.Host.Database.Migrations
 {
@@ -11,8 +12,7 @@ namespace Tgstation.Server.Host.Database.Migrations
 		/// <inheritdoc />
 		protected override void Up(MigrationBuilder migrationBuilder)
 		{
-			if (migrationBuilder == null)
-				throw new ArgumentNullException(nameof(migrationBuilder));
+			ArgumentNullException.ThrowIfNull(migrationBuilder);
 
 			migrationBuilder.DropTable(
 				name: "WatchdogReattachInformations");
@@ -32,7 +32,7 @@ namespace Tgstation.Server.Host.Database.Migrations
 					Port = table.Column<ushort>(nullable: false),
 					RebootState = table.Column<int>(nullable: false),
 					LaunchSecurityLevel = table.Column<int>(nullable: false),
-					CompileJobId = table.Column<long>(nullable: false)
+					CompileJobId = table.Column<long>(nullable: false),
 				},
 				constraints: table =>
 				{
@@ -68,7 +68,7 @@ namespace Tgstation.Server.Host.Database.Migrations
 					HeartbeatSeconds = table.Column<uint>(nullable: false),
 					AutoStart = table.Column<bool>(nullable: false),
 					InstanceId = table.Column<long>(nullable: false),
-					TopicRequestTimeout = table.Column<uint>(nullable: false)
+					TopicRequestTimeout = table.Column<uint>(nullable: false),
 				},
 				constraints: table =>
 				{
@@ -91,8 +91,7 @@ namespace Tgstation.Server.Host.Database.Migrations
 		/// <inheritdoc />
 		protected override void Down(MigrationBuilder migrationBuilder)
 		{
-			if (migrationBuilder == null)
-				throw new ArgumentNullException(nameof(migrationBuilder));
+			ArgumentNullException.ThrowIfNull(migrationBuilder);
 
 			migrationBuilder.RenameColumn(
 				name: "Port",
@@ -122,7 +121,7 @@ namespace Tgstation.Server.Host.Database.Migrations
 					AlphaId = table.Column<long>(type: "INTEGER", nullable: true),
 					AlphaIsActive = table.Column<bool>(type: "INTEGER", nullable: false),
 					BravoId = table.Column<long>(type: "INTEGER", nullable: true),
-					InstanceId = table.Column<long>(type: "INTEGER", nullable: false)
+					InstanceId = table.Column<long>(type: "INTEGER", nullable: false),
 				},
 				constraints: table =>
 				{

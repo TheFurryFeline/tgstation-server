@@ -2,47 +2,71 @@
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.IO.Abstractions;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Threading;
+
+using Microsoft.Extensions.Logging;
 
 namespace Tgstation.Server.Host.IO
 {
 	/// <inheritdoc />
 	sealed class SynchronousIOManager : ISynchronousIOManager
 	{
+		/// <summary>
+		/// The <see cref="IFileSystem"/> to use.
+		/// </summary>
+		readonly IFileSystem fileSystem;
+
+		/// <summary>
+		/// The <see cref="ILogger"/> for the <see cref="SynchronousIOManager"/>.
+		/// </summary>
+		readonly ILogger<SynchronousIOManager> logger;
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="SynchronousIOManager"/> class.
+		/// </summary>
+		/// <param name="fileSystem">The value of <see cref="fileSystem"/>.</param>
+		/// <param name="logger">The value of <see cref="logger"/>.</param>
+		public SynchronousIOManager(IFileSystem fileSystem, ILogger<SynchronousIOManager> logger)
+		{
+			this.fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
+			this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
+		}
+
 		/// <inheritdoc />
 		public bool CreateDirectory(string path, CancellationToken cancellationToken)
 		{
 			if (IsDirectory(path))
 				return true;
 			cancellationToken.ThrowIfCancellationRequested();
-			Directory.CreateDirectory(path);
+			fileSystem.Directory.CreateDirectory(path);
 			return false;
 		}
 
 		/// <inheritdoc />
 		public bool DeleteDirectory(string path)
 		{
-			if (File.Exists(path))
+			if (fileSystem.File.Exists(path))
 				return false;
 
-			if (!Directory.Exists(path))
+			if (!fileSystem.Directory.Exists(path))
 				return true;
 
-			if (Directory.EnumerateFileSystemEntries(path).Any())
+			if (fileSystem.Directory.EnumerateFileSystemEntries(path).Any())
 				return false;
 
-			Directory.Delete(path);
+			fileSystem.Directory.Delete(path);
 			return true;
 		}
 
 		/// <inheritdoc />
 		public IEnumerable<string> GetDirectories(string path, CancellationToken cancellationToken)
 		{
-			foreach (var I in Directory.EnumerateDirectories(path))
+			foreach (var directoryName in fileSystem.Directory.EnumerateDirectories(path))
 			{
-				yield return Path.GetFileName(I);
+				yield return fileSystem.Path.GetFileName(directoryName);
 				cancellationToken.ThrowIfCancellationRequested();
 			}
 		}
@@ -50,9 +74,9 @@ namespace Tgstation.Server.Host.IO
 		/// <inheritdoc />
 		public IEnumerable<string> GetFiles(string path, CancellationToken cancellationToken)
 		{
-			foreach (var I in Directory.EnumerateFiles(path))
+			foreach (var fileName in fileSystem.Directory.EnumerateFiles(path))
 			{
-				yield return Path.GetFileName(I);
+				yield return fileSystem.Path.GetFileName(fileName);
 				cancellationToken.ThrowIfCancellationRequested();
 			}
 		}
@@ -60,54 +84,58 @@ namespace Tgstation.Server.Host.IO
 		/// <inheritdoc />
 		public bool IsDirectory(string path)
 		{
-			if (path == null)
-				throw new ArgumentNullException(nameof(path));
-			return Directory.Exists(path);
+			ArgumentNullException.ThrowIfNull(path);
+			return fileSystem.Directory.Exists(path);
 		}
 
 		/// <inheritdoc />
-		public byte[] ReadFile(string path)
+		public bool WriteFileChecked(string path, Stream data, ref string? sha1InOut, CancellationToken cancellationToken)
 		{
-			if (path == null)
-				throw new ArgumentNullException(nameof(path));
-			return File.ReadAllBytes(path);
-		}
+			ArgumentNullException.ThrowIfNull(path);
+			ArgumentNullException.ThrowIfNull(data);
 
-		/// <inheritdoc />
-		public bool WriteFileChecked(string path, byte[] data, ref string sha1InOut, CancellationToken cancellationToken)
-		{
-			if (path == null)
-				throw new ArgumentNullException(nameof(path));
 			cancellationToken.ThrowIfCancellationRequested();
-			var directory = Path.GetDirectoryName(path);
-			Directory.CreateDirectory(directory);
+			var directory = fileSystem.Path.GetDirectoryName(path) ?? throw new ArgumentException("path cannot be rooted!", nameof(path));
+			fileSystem.Directory.CreateDirectory(directory);
+
+			var newFile = !fileSystem.File.Exists(path);
+
 			cancellationToken.ThrowIfCancellationRequested();
-			using (var file = File.Open(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+
+			logger.LogTrace("Starting checked write to {path} ({fileType} file)", path, newFile ? "New" : "Pre-existing");
+
+			using (var file = fileSystem.File.Open(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
 			{
 				cancellationToken.ThrowIfCancellationRequested();
 
-				// as nice as it would be to not have to arrayify the memory stream, we have to
-				// because, oddly enough sha1(memorystream) != sha1(memorystream.ToArray())
-				// vOv
-				byte[] originalBytes;
-				using (var readMs = new MemoryStream())
+				// no sha1? no write
+				if (file.Length != 0 && sha1InOut == null)
 				{
-					file.CopyTo(readMs);
-					originalBytes = readMs.ToArray();
+					logger.LogDebug("Aborting checked write due to missing SHA!");
+					return false;
 				}
 
-				// no sha1? no write
-				if (originalBytes.Length != 0 && sha1InOut == null)
-					return false;
-
 				// suppressed due to only using for consistency checks
-#pragma warning disable CA5350 // Do not use insecure cryptographic algorithm SHA1.
-				using (var sha1 = new SHA1Managed())
-#pragma warning restore CA5350 // Do not use insecure cryptographic algorithm SHA1.
+				using (var sha1 = SHA1.Create())
 				{
-					string GetSha1(byte[] dataToHash) => dataToHash != null && dataToHash.Length != 0 ? String.Join(String.Empty, sha1.ComputeHash(dataToHash).Select(b => b.ToString("x2", CultureInfo.InvariantCulture))) : null;
-					var originalSha1 = GetSha1(originalBytes);
-					if (originalSha1 != sha1InOut)
+					string? GetSha1(Stream dataToHash)
+					{
+						if (dataToHash == null)
+							return null;
+
+						byte[] sha1Computed = dataToHash.Length != 0
+							? sha1.ComputeHash(dataToHash)
+							: sha1.ComputeHash(Array.Empty<byte>());
+
+						return String.Join(String.Empty, sha1Computed.Select(b => b.ToString("x2", CultureInfo.InvariantCulture)));
+					}
+
+					var originalSha1 = GetSha1(file);
+
+					if (!newFile)
+						logger.LogTrace("Existing SHA calculated to be {sha}", originalSha1);
+
+					if (originalSha1 != sha1InOut && !(newFile && sha1InOut == null))
 					{
 						sha1InOut = originalSha1;
 						return false;
@@ -118,19 +146,35 @@ namespace Tgstation.Server.Host.IO
 
 				cancellationToken.ThrowIfCancellationRequested();
 
-				if (data != null)
+				if (data.Length != 0)
 				{
+					logger.LogDebug("Writing file of length {size}", data.Length);
 					file.Seek(0, SeekOrigin.Begin);
+					data.Seek(0, SeekOrigin.Begin);
 
 					cancellationToken.ThrowIfCancellationRequested();
 					file.SetLength(data.Length);
-					file.Write(data, 0, data.Length);
+					data.CopyTo(file);
 				}
 			}
 
-			if (data == null)
-				File.Delete(path);
+			if (data.Length == 0)
+			{
+				logger.LogDebug("Stream is empty, deleting file");
+				fileSystem.File.Delete(path);
+			}
+
 			return true;
 		}
+
+		/// <inheritdoc />
+		public Stream GetFileStream(string path)
+			=> fileSystem.FileStream.New(
+				path,
+				FileMode.Open,
+				FileAccess.Read,
+				FileShare.Read | FileShare.Delete,
+				DefaultIOManager.DefaultBufferSize,
+				true);
 	}
 }

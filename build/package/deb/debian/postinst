@@ -1,0 +1,26 @@
+#!/bin/sh -e
+
+if [ -z "$2" ]; then
+	adduser --system --home /home/tgstation-server tgstation-server
+	mkdir -m 754 -p /var/log/tgstation-server
+	chown -R tgstation-server /etc/tgstation-server
+	chown -R tgstation-server /opt/tgstation-server/lib
+	chown -R tgstation-server /var/log/tgstation-server
+fi
+
+#DEBHELPER#
+
+if [ -z "$2" ]; then
+	deb-systemd-helper stop 'tgstation-server.service' >/dev/null || true
+
+	echo "  _            _        _   _                                                "
+	echo " | |_ __ _ ___| |_ __ _| |_(_) ___  _ __        ___  ___ _ ____   _____ _ __ "
+	echo " | __/ _\` / __| __/ _\` | __| |/ _ \\| '_ \\ _____/ __|/ _ \\ '__\\ \\ / / _ \\ '__|"
+	echo " | || (_| \\__ \\ || (_| | |_| | (_) | | | |_____\\__ \\  __/ |   \\ V /  __/ |   "
+	echo "  \\__\\__, |___/\\__\\__,_|\\__|_|\\___/|_| |_|     |___/\\___|_|    \\_/ \\___|_|   "
+	echo "     |___/                                                                   "
+	echo "tgstation-server is now installed but must first be configured"
+	echo "Run 'sudo tgs-configure' to interactively configure your server"
+	echo "Alternatively, edit '/etc/tgstation-server/appsettings.Production.yml' to your desired specifications"
+	echo "Once complete, run 'sudo systemctl start tgstation-server' to start the service"
+fi

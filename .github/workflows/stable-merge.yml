@@ -1,28 +1,39 @@
-name: 'Master Merge'
+name: Master Merge
 
 on:
-    push:
-      branches:
-        - master
+  push:
+    branches:
+      - master
+  workflow_dispatch:
 
 jobs:
   master-merge:
-
+    name: Master Merge
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout
-      uses: actions/checkout@v1
+      - name: Generate App Token
+        id: app-token-generation
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
-    - name: Merge master into dev
-      uses: robotology/gh-action-nightly-merge@v1.2.0
-      with:
-        stable_branch: 'master'
-        development_branch: 'dev'
-        allow_ff: true
-        user_name: tgstation-server
-        user_email: tgstation-server@users.noreply.github.com
-        push_token: DEV_PUSH_TOKEN
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        DEV_PUSH_TOKEN: ${{ secrets.DEV_PUSH_TOKEN }}
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token-generation.outputs.token }}
+
+      - name: Merge master into dev
+        uses: robotology/gh-action-nightly-merge@81570ba03dd370f582bd3f52d47672d29191829f #v1.5.2
+        with:
+          stable_branch: master
+          development_branch: dev
+          allow_ff: true
+          allow_forks: true
+          user_name: tgstation-server-ci[bot]
+          user_email: 161980869+tgstation-server-ci[bot]@users.noreply.github.com
+          push_token: INSTALLATION_TOKEN
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token-generation.outputs.token }}
+          INSTALLATION_TOKEN: ${{ steps.app-token-generation.outputs.token }}

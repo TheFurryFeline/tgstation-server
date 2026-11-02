@@ -1,9 +1,10 @@
-using Castle.Core.Logging;
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
 using System;
-using System.Threading.Tasks;
+using System.IO.Abstractions.TestingHelpers;
+using System.Runtime.InteropServices;
+
 using Tgstation.Server.Host.IO;
 
 namespace Tgstation.Server.Host.System.Tests
@@ -14,23 +15,23 @@ namespace Tgstation.Server.Host.System.Tests
 	[TestClass]
 	public sealed class TestProcessFeatures
 	{
-		IProcessFeatures features;
+		static IProcessFeatures features;
 
-		[TestInitialize]
-		public void Init()
+		[ClassInitialize]
+		public static void Init(TestContext _)
 		{
-			features = new PlatformIdentifier().IsWindows
-				? (IProcessFeatures)new WindowsProcessFeatures()
-				: new PosixProcessFeatures(new Lazy<IProcessExecutor>(() => null), new DefaultIOManager(), Mock.Of<ILogger<PosixProcessFeatures>>());
+			features = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+				? (IProcessFeatures)new WindowsProcessFeatures(Mock.Of<ILogger<WindowsProcessFeatures>>())
+				: new PosixProcessFeatures(new Lazy<IProcessExecutor>(() => null), new DefaultIOManager(new MockFileSystem()), Mock.Of<ILogger<PosixProcessFeatures>>());
 		}
 
 		[TestMethod]
-		public async Task TestGetUsername()
+		public void TestGetUsername()
 		{
 			if (!new PlatformIdentifier().IsWindows)
 				Assert.Inconclusive("This test is buggy on linux and not required");
 
-			var username = await features.GetExecutingUsername(global::System.Diagnostics.Process.GetCurrentProcess(), default);
+			var username = features.GetExecutingUsername(global::System.Diagnostics.Process.GetCurrentProcess());
 			Assert.IsTrue(username.Contains(Environment.UserName), $"Exepcted a string containing \"{Environment.UserName}\", got \"{username}\"");
 		}
 	}

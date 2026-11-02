@@ -1,117 +1,172 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
-  <Import Project="../../build/Version.props" />
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+  <Import Project="../../build/SrcCommon.props" />
 
   <PropertyGroup>
-    <TargetFramework>netcoreapp3.1</TargetFramework>
-    <DebugType>Full</DebugType>
+    <TargetFramework>$(TgsFrameworkVersion)</TargetFramework>
     <Version>$(TgsCoreVersion)</Version>
-    <LangVersion>latest</LangVersion>
-    <CodeAnalysisRuleSet>../../build/analyzers.ruleset</CodeAnalysisRuleSet>
-    <IsPackable>false</IsPackable>
     <IncludeOpenAPIAnalyzers>true</IncludeOpenAPIAnalyzers>
-    <DocumentationFile>bin\$(Configuration)\netcoreapp3.1\Tgstation.Server.Host.xml</DocumentationFile>
-    <NoWarn>API1000</NoWarn>
-  </PropertyGroup>
-
-  <PropertyGroup Condition="'$(Configuration)'=='Release'">
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <WarningsAsErrors />
-  </PropertyGroup>
-  
-  <PropertyGroup>
+    <UseAppHost>false</UseAppHost>
+    <NoWarn>API1000;ASP0019;CA1000</NoWarn>
     <NodeModulesFolder>ClientApp/node_modules</NodeModulesFolder>
     <NpmInstallStampFile>ClientApp/node_modules/.install-stamp</NpmInstallStampFile>
+    <Nullable>enable</Nullable>
     <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
     <DockerfileContext>..\..</DockerfileContext>
+    <ApplicationManifest>../../build/uac_elevation_manifest.xml</ApplicationManifest>
   </PropertyGroup>
-  
-  <Target Name="NpmInstall" Inputs="ClientApp/package-lock.json" Outputs="$(NpmInstallStampFile)">
-    <Message Text="Restoring npm packages..." Importance="high" />
-    <Exec WorkingDirectory="ClientApp" Command="npm ci" />
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <DefineConstants>$(DefineConstants);WATCHDOG_FREE_RESTART</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TGS_HOST_NO_WEBPANEL)' == 'true'">
+    <DefineConstants>$(DefineConstants);NO_WEBPANEL</DefineConstants>
+  </PropertyGroup>
+
+  <Target Condition="'$(TGS_HOST_NO_WEBPANEL)' != 'true'" Name="ClientInstall" BeforeTargets="ResolveAssemblyReferences" Inputs="../../build/WebpanelVersion.props" Outputs="$(NpmInstallStampFile)">
+    <Message Text="Pulling web control panel..." Importance="high" />
+    <RemoveDir Directories="ClientApp" />
+    <Exec Command="git clone https://github.com/tgstation/tgstation-server-webpanel --branch v$(TgsWebpanelVersion) --depth 1 ClientApp" />
+    <RemoveDir Directories="ClientApp/.git" /> <!-- Allows git clean to clean it out -->
+    <Message Text="Restoring yarn packages..." Importance="high" />
+    <Exec WorkingDirectory="ClientApp" Command="yarn install --immutable" />
     <Touch Files="$(NpmInstallStampFile)" AlwaysCreate="true" />
   </Target>
 
-  <Target Name="NpmBuild" BeforeTargets="BeforeBuild" DependsOnTargets="NpmInstall" Inputs="@(ClientApp)" Outputs="wwwroot\index.html">
+  <Target Condition="'$(TGS_HOST_NO_WEBPANEL)' != 'true'" Name="NpmBuild" BeforeTargets="BeforeBuild" DependsOnTargets="ClientInstall" Inputs="../../build/WebpanelVersion.props" Outputs="wwwroot\index.html">
     <Message Text="Building web control panel..." Importance="high" />
-    <Exec WorkingDirectory="ClientApp" Command="npm run msbuild" />
+    <Exec WorkingDirectory="ClientApp" Command="yarn run msbuild" />
   </Target>
-  
+
+  <Target Name="ExportGraphQLApiSchema" AfterTargets="AfterBuild" Outputs="../../artifacts/tgs-api.graphql">
+    <Message Text="Exporting GraphQL API Schema..." Importance="high" />
+    <Exec Command="dotnet $(TargetPath)" EnvironmentVariables="General__SetupWizardMode=Never;Internal__DumpGraphQLApiPath=../../artifacts/tgs-api.graphql;Internal__EnableGraphQL=true" />
+  </Target>
+
   <Target Name="NpmClean" AfterTargets="Clean">
     <Message Text="Cleaning web control panel..." Importance="high" />
     <RemoveDir Directories="wwwroot" />
   </Target>
 
+  <Target Name="ApplyMasterVersionsAttribute" BeforeTargets="CoreCompile">
+    <ItemGroup>
+      <MasterVersionAssemblyAttributes Include="Tgstation.Server.Host.Properties.MasterVersionsAttribute">
+        <_Parameter1>$(TgsConfigVersion)</_Parameter1>
+        <_Parameter2>$(TgsInteropVersion)</_Parameter2>
+        <_Parameter3>$(TgsWebpanelVersion)</_Parameter3>
+        <_Parameter4>$(TgsHostWatchdogVersion)</_Parameter4>
+        <_Parameter5>$(TgsMariaDBRedistVersion)</_Parameter5>
+        <_Parameter6>$(TgsSwarmProtocolVersion)</_Parameter6>
+        <_Parameter7>$(TgsGraphQLVersion)</_Parameter7>
+      </MasterVersionAssemblyAttributes>
+    </ItemGroup>
+    <WriteCodeFragment AssemblyAttributes="@(MasterVersionAssemblyAttributes)" Language="C#" OutputDirectory="$(IntermediateOutputPath)" OutputFile="MasterVersionsAssemblyInfo.cs">
+      <Output TaskParameter="OutputFile" ItemName="Compile" />
+      <Output TaskParameter="OutputFile" ItemName="FileWrites" />
+    </WriteCodeFragment>
+  </Target>
+
   <ItemGroup>
-    <PackageReference Include="BetterWin32Errors" Version="0.2.0" />
-    <PackageReference Include="Byond.TopicSender" Version="5.0.0" />
-    <PackageReference Include="Cyberboss.AspNetCore.AsyncInitializer" Version="1.2.0" />
-    <PackageReference Include="Cyberboss.SmartIrc4net.Standard" Version="0.4.6" />
-    <PackageReference Include="Discord.Net.WebSocket" Version="2.2.0" />
-    <PackageReference Include="LibGit2Sharp" Version="0.27.0-preview-0034" />
-    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="3.1.6" />
-    <PackageReference Include="Microsoft.AspNetCore.Mvc.NewtonsoftJson" Version="3.1.6" />
-    <PackageReference Include="Microsoft.CodeAnalysis.FxCopAnalyzers" Version="3.3.0-beta1.final">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
-    </PackageReference>
-    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="3.1.6" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="3.1.6">
-      <PrivateAssets>all</PrivateAssets>
+    <!-- Usage: Interop with BYOND's /world/Topic -->
+    <PackageReference Include="Byond.TopicSender" />
+    <!-- Usage: 503'ing request pipeline until server is finished initializing -->
+    <PackageReference Include="Cyberboss.AspNetCore.AsyncInitializer" />
+    <!-- Usage: IRC interop -->
+    <PackageReference Include="Cyberboss.SmartIrc4net.Standard" />
+    <!-- Usage: .env file parsing -->
+    <PackageReference Include="DotEnv.Core" />
+    <!-- Usage: Text formatter for Elasticsearch logging plugin -->
+    <PackageReference Include="Elastic.CommonSchema.Serilog" />
+    <!-- Usage: GraphQL API Engine -->
+    <PackageReference Include="HotChocolate.AspNetCore" />
+    <!-- Usage: GraphQL Authorization Plugin -->
+    <PackageReference Include="HotChocolate.AspNetCore.Authorization" />
+    <!-- Usage: GraphQL IDatabaseContext support -->
+    <PackageReference Include="HotChocolate.Data.EntityFramework" />
+    <!-- Usage: DataLoader source generation -->
+    <PackageReference Include="HotChocolate.Types.Analyzers" />
+    <!-- Usage: GraphQL additional scalar type definitions -->
+    <PackageReference Include="HotChocolate.Types.Scalars" />
+    <!-- Usage: git interop -->
+    <PackageReference Include="LibGit2Sharp" />
+    <!-- Usage: OpenID Connect support -->
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" />
+    <!-- Usage: Support ""legacy"" Newotonsoft.Json in HTTP pipeline. The rest of our codebase uses Newtonsoft. -->
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.NewtonsoftJson" />
+    <!-- Usage: Using target JSON serializer for API -->
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.NewtonsoftJson" />
+    <!-- Usage: Generating dumps of dotnet engine processes -->
+    <PackageReference Include="Microsoft.Diagnostics.NETCore.Client" />
+    <!-- Usage: Database ORM -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <!-- Usage: Automatic migration generation using command line -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="3.1.6" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="3.1.6" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="3.1.6">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-    </PackageReference>
-    <PackageReference Include="Microsoft.VisualStudio.Azure.Containers.Tools.Targets" Version="1.10.8" />
-    <PackageReference Include="Mono.Posix.NETStandard" Version="1.0.0" />
-    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="3.1.4" />
-    <PackageReference Include="Octokit" Version="0.48.0" />
-    <PackageReference Include="Pomelo.EntityFrameworkCore.MySql" Version="3.1.2" />
-    <!-- If this is updated, be sure to update the reference in the README.md -->
-    <PackageReference Include="Serilog.Extensions.Logging" Version="3.0.1" />
-    <PackageReference Include="Serilog.Sinks.Async" Version="1.4.0" />
-    <PackageReference Include="Serilog.Sinks.Console" Version="3.1.1" />
-    <PackageReference Include="Serilog.Sinks.File" Version="4.1.0" />
-    <PackageReference Include="StyleCop.Analyzers" Version="1.1.118">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
-    </PackageReference>
-    <PackageReference Include="Swashbuckle.AspNetCore" Version="5.5.1" />
-    <PackageReference Include="Swashbuckle.AspNetCore.Newtonsoft" Version="5.5.1" />
-    <PackageReference Include="System.Data.SqlClient" Version="4.8.1" />
-    <PackageReference Include="System.DirectoryServices.AccountManagement" Version="4.7.0" />
-    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="6.7.1" />
-    <PackageReference Include="System.Management" Version="4.7.0" />
-    <PackageReference Include="Wangkanai.Detection.Browser" Version="2.0.0" />
-    <PackageReference Include="Z.EntityFramework.Plus.EFCore" Version="3.0.55" />
+    <!-- Usage: Sqlite ORM plugin -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+    <!-- Usage: MSSQL ORM plugin -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
+    <!-- Usage: Database connectivity health check -->
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.EntityFrameworkCore" />
+    <!-- Usage: OIDC support prerequisite. See https://stackoverflow.com/a/78650835/3976486 -->
+    <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" />
+    <!-- Usage: POSIX support for syscalls, signals, and symlinks -->
+    <PackageReference Include="Mono.Posix.NETStandard" />
+    <!-- Usage: Cron string parsing -->
+    <PackageReference Include="NCrontab.Signed" />
+    <!-- Usage: YAML config plugin -->
+    <PackageReference Include="NetEscapades.Configuration.Yaml" />
+    <!-- Usage: PostgresSQL ORM plugin -->
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <!-- Usage: MYSQL/MariaDB ORM plugin -->
+    <PackageReference Include="Pomelo.EntityFrameworkCore.MySql" />
+    <!-- Usage: Publishing Prometheus metrics -->
+    <PackageReference Include="prometheus-net.AspNetCore.HealthChecks" />
+    <!-- Usage: Discord interop -->
+    <PackageReference Include="Remora.Discord" />
+    <!-- Usage: Rich logger builder -->
+    <PackageReference Include="Serilog.Extensions.Logging" />
+    <!-- Usage: Async logging plugin -->
+    <PackageReference Include="Serilog.Sinks.Async" />
+    <!-- Usage: Console logging plugin -->
+    <PackageReference Include="Serilog.Sinks.Console" />
+    <!-- Usage: Elasticsearch logging plugin -->
+    <PackageReference Include="Serilog.Sinks.Elasticsearch" />
+    <!-- Usage: File logging plugin -->
+    <PackageReference Include="Serilog.Sinks.File" />
+    <!-- Usage: OpenAPI spec generator -->
+    <PackageReference Include="Swashbuckle.AspNetCore" />
+    <!-- Usage: Newtonsoft.Json plugin for OpenAPI spec generator -->
+    <PackageReference Include="Swashbuckle.AspNetCore.Newtonsoft" />
+    <!-- Usage: Windows authentication plugin allowing searching for users by name -->
+    <PackageReference Include="System.DirectoryServices.AccountManagement" />
+    <!-- Usage: Filesystem abstraction -->
+    <PackageReference Include="System.IO.Abstractions" />
+    <!-- Usage: Identifying owning user of Windows Process objects -->
+    <PackageReference Include="System.Management" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Tgstation.Server.Api\Tgstation.Server.Api.csproj" />
-  </ItemGroup>
-
-  <ItemGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
-    <Compile Remove="Database\Design\**\*" />
-    <None Include="Database\Design\**\*" />
+    <ProjectReference Include="..\Tgstation.Server.Host.Common\Tgstation.Server.Host.Common.csproj" />
+    <ProjectReference Include="..\Tgstation.Server.Host.Utils.GitLab.GraphQL\Tgstation.Server.Host.Utils.GitLab.GraphQL.csproj" />
+    <ProjectReference Include="..\Tgstation.Server.Shared\Tgstation.Server.Shared.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <Content Remove="ClientApp\package-lock.json" />
-    <Content Remove="ClientApp\package.json" />
-    <Content Remove="ClientApp\tsconfig.json" />
-    <Content Remove="ClientApp\tslint.json" />
-    <None Include="ClientApp\package-lock.json" />
-    <None Include="ClientApp\package.json" />
-    <None Include="ClientApp\tsconfig.json" />
+    <Content Remove="ClientApp\**\*.json" />
+    <None Include="ClientApp\**\*.json" />
     <ClientApp Include="ClientApp\src\**\*;ClientApp\public\**\*;ClientApp\tsconfig.json;ClientApp\package.json;ClientApp\package-lock.json" />
-    <AdditionalFiles Include="../../build/stylecop.json" />
+    <AdditionalFiles Include="../../build/uac_elevation_manifest.xml" />
   </ItemGroup>
-  
+
   <ItemGroup>
-    <Content Update="appsettings.json">
+    <Content Include="appsettings.yml" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Update="appsettings.yml">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

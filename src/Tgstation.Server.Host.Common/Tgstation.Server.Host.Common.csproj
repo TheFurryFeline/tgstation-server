@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="../../build/SrcCommon.props" />
+
+  <PropertyGroup>
+    <TargetFrameworks>$(TgsFrameworkVersion);net2.0</TargetFrameworks>
+    <Version>$(TgsCoreVersion)</Version>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

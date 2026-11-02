@@ -1,25 +1,32 @@
-﻿using Microsoft.Extensions.Logging;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+
+using Microsoft.Extensions.Logging;
+
 using Tgstation.Server.Host.Components.Chat.Commands;
+using Tgstation.Server.Host.Utils;
 
 namespace Tgstation.Server.Host.Components.Chat
 {
 	/// <inheritdoc />
-	sealed class ChatTrackingContext : IChatTrackingContext
+	sealed class ChatTrackingContext : DisposeInvoker, IChatTrackingContext
 	{
 		/// <inheritdoc />
 		public bool Active
 		{
-			get => active;
+			get => active && !IsDisposed;
 			set
 			{
 				if (active == value)
 					return;
-				logger.LogTrace(value ? "Activated" : "Deactivated");
+				if (value)
+					logger.LogTrace("Activated");
+				else
+					logger.LogTrace("Deactivated");
+
 				active = value;
 			}
 		}
@@ -55,9 +62,14 @@ namespace Tgstation.Server.Host.Components.Chat
 		readonly ILogger<ChatTrackingContext> logger;
 
 		/// <summary>
-		/// <see langword="lock"/> <see cref="object"/> for modifying <see cref="onDispose"/>, <see cref="channelSink"/>, and <see cref="Channels"/>.
+		/// <see langword="lock"/> <see cref="object"/> for modifying <see cref="Channels"/> and calling <see cref="IChannelSink.UpdateChannels(IEnumerable{ChannelRepresentation}, CancellationToken)"/>.
 		/// </summary>
 		readonly object synchronizationLock;
+
+		/// <summary>
+		/// The <see cref="IChannelSink"/> if any.
+		/// </summary>
+		volatile IChannelSink? channelSink;
 
 		/// <summary>
 		/// Backing field for <see cref="CustomCommands"/>.
@@ -65,37 +77,27 @@ namespace Tgstation.Server.Host.Components.Chat
 		IReadOnlyCollection<CustomCommand> customCommands;
 
 		/// <summary>
-		/// The <see cref="IChannelSink"/> if any.
-		/// </summary>
-		IChannelSink channelSink;
-
-		/// <summary>
-		/// The <see cref="Action"/> to run when <see cref="Dispose"/>d.
-		/// </summary>
-		Action onDispose;
-
-		/// <summary>
 		/// Backing field for <see cref="Active"/>.
 		/// </summary>
 		bool active;
 
 		/// <summary>
-		/// Initializes a new instance of the <see cref="ChatTrackingContext"/> <see langword="class"/>.
+		/// Initializes a new instance of the <see cref="ChatTrackingContext"/> class.
 		/// </summary>
 		/// <param name="customCommandHandler">The value of <see cref="customCommandHandler"/>.</param>
 		/// <param name="initialChannels">The initial value of <see cref="Channels"/>.</param>
 		/// <param name="logger">The value of <see cref="logger"/>.</param>
-		/// <param name="onDispose">The value of <see cref="onDispose"/>.</param>
+		/// <param name="disposeAction">The <see cref="IDisposable.Dispose"/> action for the <see cref="DisposeInvoker"/>.</param>
 		public ChatTrackingContext(
 			ICustomCommandHandler customCommandHandler,
 			IEnumerable<ChannelRepresentation> initialChannels,
 			ILogger<ChatTrackingContext> logger,
-			Action onDispose)
+			Action disposeAction)
+			: base(disposeAction)
 		{
 			this.customCommandHandler = customCommandHandler ?? throw new ArgumentNullException(nameof(customCommandHandler));
 			Channels = initialChannels?.ToList() ?? throw new ArgumentNullException(nameof(initialChannels));
 			this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
-			this.onDispose = onDispose ?? throw new ArgumentNullException(nameof(onDispose));
 
 			synchronizationLock = new object();
 			Active = true;
@@ -103,40 +105,25 @@ namespace Tgstation.Server.Host.Components.Chat
 		}
 
 		/// <inheritdoc />
-		public void Dispose()
-		{
-			lock (synchronizationLock)
-			{
-				onDispose?.Invoke();
-				onDispose = null;
-			}
-		}
-
-		/// <inheritdoc />
 		public void SetChannelSink(IChannelSink channelSink)
 		{
-			if (channelSink == null)
-				throw new ArgumentNullException(nameof(channelSink));
+			ArgumentNullException.ThrowIfNull(channelSink);
 
-			lock (synchronizationLock)
-			{
-				if (this.channelSink != null)
-					throw new InvalidOperationException("channelSink already set!");
-
-				this.channelSink = channelSink;
-			}
+			var originalValue = Interlocked.CompareExchange(ref this.channelSink, channelSink, null);
+			if (originalValue != null)
+				throw new InvalidOperationException("channelSink already set!");
 		}
 
 		/// <inheritdoc />
-		public Task UpdateChannels(IEnumerable<ChannelRepresentation> newChannels, CancellationToken cancellationToken)
+		public ValueTask UpdateChannels(IEnumerable<ChannelRepresentation> newChannels, CancellationToken cancellationToken)
 		{
 			logger.LogTrace("UpdateChannels...");
 			var completed = newChannels.ToList();
-			Task updateTask;
+			ValueTask updateTask;
 			lock (synchronizationLock)
 			{
 				Channels = completed;
-				updateTask = channelSink?.UpdateChannels(newChannels, cancellationToken) ?? Task.CompletedTask;
+				updateTask = channelSink?.UpdateChannels(newChannels, cancellationToken) ?? ValueTask.CompletedTask;
 			}
 
 			return updateTask;

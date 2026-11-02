@@ -1,37 +1,21 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
-  <Import Project="../../build/Version.props" />
-  
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="../../build/SrcCommon.props" />
+
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>netcoreapp3.1</TargetFramework>
-    <DebugType>Full</DebugType>
+    <TargetFramework>$(TgsFrameworkVersion)</TargetFramework>
+    <!-- Important that this is core and not host watchdog. Bootstrapping depends on it -->
     <Version>$(TgsCoreVersion)</Version>
-    <CodeAnalysisRuleSet>../../build/analyzers.ruleset</CodeAnalysisRuleSet>
-    <LangVersion>latest</LangVersion>
-    <IsPackable>false</IsPackable>
-  </PropertyGroup>
-
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <WarningsAsErrors />
-    <DocumentationFile>bin\Release\netcoreapp3.1\Tgstation.Server.Host.Console.xml</DocumentationFile>
-  </PropertyGroup>
-
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
-    <NoWarn>1701;1702;SA1652</NoWarn>
-    <DocumentationFile>bin\Debug\netcoreapp3.1\Tgstation.Server.Host.Console.xml</DocumentationFile>
+    <Nullable>enable</Nullable>
+    <UseAppHost>false</UseAppHost>
+    <ApplicationManifest>../../build/uac_elevation_manifest.xml</ApplicationManifest>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.CodeAnalysis.FxCopAnalyzers" Version="3.0.0">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>compile; build; native; contentfiles; analyzers</IncludeAssets>
-    </PackageReference>
-    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="2.2.0" />
-    <PackageReference Include="StyleCop.Analyzers" Version="1.1.118">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
-    </PackageReference>
+    <!-- Usage: Identifying if we're running under SystemD -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" />
+    <!-- Usage: Console logging plugin -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
   </ItemGroup>
 
   <ItemGroup>
@@ -48,6 +32,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <AdditionalFiles Include="../../build/stylecop.json" />
+    <AdditionalFiles Include="../../build/uac_elevation_manifest.xml" />
   </ItemGroup>
 </Project>

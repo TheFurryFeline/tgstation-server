@@ -1,15 +1,17 @@
 ﻿using System.Threading;
 using System.Threading.Tasks;
 
+using Tgstation.Server.Host.Components.Interop;
+
 namespace Tgstation.Server.Host.Components.Chat.Commands
 {
 	/// <summary>
-	/// kek
+	/// kek.
 	/// </summary>
 	sealed class KekCommand : ICommand
 	{
 		/// <summary>
-		/// kek
+		/// kek.
 		/// </summary>
 		const string Kek = "kek";
 
@@ -23,6 +25,9 @@ namespace Tgstation.Server.Host.Components.Chat.Commands
 		public bool AdminOnly => false;
 
 		/// <inheritdoc />
-		public Task<string> Invoke(string arguments, ChatUser user, CancellationToken cancellationToken) => Task.FromResult(Kek);
+		public ValueTask<MessageContent> Invoke(string arguments, ChatUser user, CancellationToken cancellationToken) => ValueTask.FromResult(new MessageContent
+		{
+			Text = Kek,
+		});
 	}
 }

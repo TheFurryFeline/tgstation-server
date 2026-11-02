@@ -46,11 +46,31 @@ namespace Tgstation.Server.Host.Components.Interop.Topic
 		/// <summary>
 		/// Ping to ensure the server is running.
 		/// </summary>
-		Heartbeat,
+		HealthCheck,
 
 		/// <summary>
 		/// Notify the server of a reattach and potentially new version.
 		/// </summary>
-		ServerRestarted
+		ServerRestarted,
+
+		/// <summary>
+		/// Part of a larger topic.
+		/// </summary>
+		SendChunk,
+
+		/// <summary>
+		/// Receive additional data for a previous response.
+		/// </summary>
+		ReceiveChunk,
+
+		/// <summary>
+		/// Sending a broadcast message.
+		/// </summary>
+		Broadcast,
+
+		/// <summary>
+		/// Notifying about the completion of a custom event.
+		/// </summary>
+		CompleteEvent,
 	}
 }

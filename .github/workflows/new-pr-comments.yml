@@ -1,0 +1,37 @@
+name: CI Gated PR Comments
+
+on:
+  pull_request_target:
+    types:
+      - opened
+    branches:
+      - dev
+      - master
+      - V7
+
+jobs:
+  comment-on-new-pr:
+    name: Comment New PR
+    if: github.event.pull_request.head.repo.id != github.event.pull_request.base.repo.id || github.event.pull_request.user.id == 49699333
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate App Token
+        id: app-token-generation
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Comment on new Fork PR
+        if: github.event.pull_request.user.id != 49699333
+        uses: thollander/actions-comment-pull-request@24bffb9b452ba05a4f3f77933840a6a841d1b32b
+        with:
+          message: Thank you for contributing to ${{ github.event.pull_request.base.repo.name }}! The CI Pipeline workflow requires repository secrets and will not run without approval. Maintainers can add the `CI Cleared` label to allow it to run. Note that any changes to ci-security.yml and ci-pipeline.yml will not be reflected.
+          github-token: ${{ steps.app-token-generation.outputs.token }}
+
+      - name: Comment on dependabot PR
+        if: github.event.pull_request.user.id == 49699333
+        uses: thollander/actions-comment-pull-request@24bffb9b452ba05a4f3f77933840a6a841d1b32b
+        with:
+          message: Set the milestone to the next ${{ (github.event.pull_request.base.ref == 'master' && 'patch') || 'minor' }} version, check for supply chain attacks, and then add the `CI Cleared` label to allow CI to run.
+          github-token: ${{ steps.app-token-generation.outputs.token }}

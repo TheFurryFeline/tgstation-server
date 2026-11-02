@@ -1,20 +1,20 @@
 ﻿using System;
+
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 namespace Tgstation.Server.Host.Database.Migrations
 {
 	/// <summary>
-	/// The initial database migration for MySQL/MariaDB
+	/// The initial database migration for MySQL/MariaDB.
 	/// </summary>
-	#pragma warning disable CA1506
+#pragma warning disable CA1506
 	public partial class MYInitialCreate : Migration
 	{
 		/// <inheritdoc />
 		protected override void Up(MigrationBuilder migrationBuilder)
 		{
-			if (migrationBuilder == null)
-				throw new ArgumentNullException(nameof(migrationBuilder));
+			ArgumentNullException.ThrowIfNull(migrationBuilder);
 
 			migrationBuilder.CreateTable(
 				name: "Users",
@@ -31,7 +31,7 @@ namespace Tgstation.Server.Host.Database.Migrations
 					PasswordHash = table.Column<string>(nullable: true),
 					CreatedById = table.Column<long>(nullable: true),
 					CanonicalName = table.Column<string>(nullable: false),
-					LastPasswordUpdate = table.Column<DateTimeOffset>(nullable: true)
+					LastPasswordUpdate = table.Column<DateTimeOffset>(nullable: true),
 				},
 				constraints: table =>
 				{
@@ -56,7 +56,7 @@ namespace Tgstation.Server.Host.Database.Migrations
 					Tag = table.Column<string>(nullable: true),
 					Id = table.Column<long>(nullable: false)
 						.Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
-					ChatSettingsId = table.Column<long>(nullable: false)
+					ChatSettingsId = table.Column<long>(nullable: false),
 				},
 				constraints: table =>
 				{
@@ -77,7 +77,7 @@ namespace Tgstation.Server.Host.Database.Migrations
 					RebootState = table.Column<int>(nullable: false),
 					Id = table.Column<long>(nullable: false)
 						.Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
-					CompileJobId = table.Column<long>(nullable: true)
+					CompileJobId = table.Column<long>(nullable: true),
 				},
 				constraints: table =>
 				{
@@ -92,7 +92,7 @@ namespace Tgstation.Server.Host.Database.Migrations
 					Id = table.Column<long>(nullable: false)
 						.Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
 					AlphaId = table.Column<long>(nullable: true),
-					BravoId = table.Column<long>(nullable: true)
+					BravoId = table.Column<long>(nullable: true),
 				},
 				constraints: table =>
 				{
@@ -122,7 +122,7 @@ namespace Tgstation.Server.Host.Database.Migrations
 					Online = table.Column<bool>(nullable: false),
 					ConfigurationType = table.Column<int>(nullable: false),
 					AutoUpdateInterval = table.Column<uint>(nullable: false),
-					WatchdogReattachInformationId = table.Column<long>(nullable: true)
+					WatchdogReattachInformationId = table.Column<long>(nullable: true),
 				},
 				constraints: table =>
 				{
@@ -145,7 +145,7 @@ namespace Tgstation.Server.Host.Database.Migrations
 					Enabled = table.Column<bool>(nullable: true),
 					Provider = table.Column<int>(nullable: true),
 					ConnectionString = table.Column<string>(nullable: false),
-					InstanceId = table.Column<long>(nullable: false)
+					InstanceId = table.Column<long>(nullable: false),
 				},
 				constraints: table =>
 				{
@@ -174,7 +174,7 @@ namespace Tgstation.Server.Host.Database.Migrations
 						.Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
 					ProcessId = table.Column<int>(nullable: true),
 					AccessToken = table.Column<string>(nullable: true),
-					InstanceId = table.Column<long>(nullable: false)
+					InstanceId = table.Column<long>(nullable: false),
 				},
 				constraints: table =>
 				{
@@ -195,7 +195,7 @@ namespace Tgstation.Server.Host.Database.Migrations
 					ApiValidationPort = table.Column<ushort>(nullable: false),
 					Id = table.Column<long>(nullable: false)
 						.Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
-					InstanceId = table.Column<long>(nullable: false)
+					InstanceId = table.Column<long>(nullable: false),
 				},
 				constraints: table =>
 				{
@@ -222,7 +222,7 @@ namespace Tgstation.Server.Host.Database.Migrations
 					ConfigurationRights = table.Column<ulong>(nullable: false),
 					Id = table.Column<long>(nullable: false)
 						.Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
-					InstanceId = table.Column<long>(nullable: false)
+					InstanceId = table.Column<long>(nullable: false),
 				},
 				constraints: table =>
 				{
@@ -256,7 +256,7 @@ namespace Tgstation.Server.Host.Database.Migrations
 					CancelRight = table.Column<ulong>(nullable: true),
 					StartedById = table.Column<long>(nullable: false),
 					CancelledById = table.Column<long>(nullable: true),
-					InstanceId = table.Column<long>(nullable: false)
+					InstanceId = table.Column<long>(nullable: false),
 				},
 				constraints: table =>
 				{
@@ -295,7 +295,7 @@ namespace Tgstation.Server.Host.Database.Migrations
 					AutoUpdatesSynchronize = table.Column<bool>(nullable: false),
 					Id = table.Column<long>(nullable: false)
 						.Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
-					InstanceId = table.Column<long>(nullable: false)
+					InstanceId = table.Column<long>(nullable: false),
 				},
 				constraints: table =>
 				{
@@ -316,7 +316,7 @@ namespace Tgstation.Server.Host.Database.Migrations
 					OriginCommitSha = table.Column<string>(maxLength: 40, nullable: false),
 					Id = table.Column<long>(nullable: false)
 						.Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
-					InstanceId = table.Column<long>(nullable: false)
+					InstanceId = table.Column<long>(nullable: false),
 				},
 				constraints: table =>
 				{
@@ -340,7 +340,7 @@ namespace Tgstation.Server.Host.Database.Migrations
 					DirectoryName = table.Column<Guid>(nullable: true),
 					JobId = table.Column<long>(nullable: true),
 					RevisionInformationId = table.Column<long>(nullable: false),
-					ByondVersion = table.Column<string>(nullable: false)
+					ByondVersion = table.Column<string>(nullable: false),
 				},
 				constraints: table =>
 				{
@@ -374,7 +374,7 @@ namespace Tgstation.Server.Host.Database.Migrations
 						.Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
 					MergedAt = table.Column<DateTimeOffset>(nullable: false),
 					MergedById = table.Column<long>(nullable: false),
-					PrimaryRevisionInformationId = table.Column<long>(nullable: true)
+					PrimaryRevisionInformationId = table.Column<long>(nullable: true),
 				},
 				constraints: table =>
 				{
@@ -400,7 +400,7 @@ namespace Tgstation.Server.Host.Database.Migrations
 					Id = table.Column<long>(nullable: false)
 						.Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
 					TestMergeId = table.Column<long>(nullable: false),
-					RevisionInformationId = table.Column<long>(nullable: false)
+					RevisionInformationId = table.Column<long>(nullable: false),
 				},
 				constraints: table =>
 				{
@@ -590,8 +590,7 @@ namespace Tgstation.Server.Host.Database.Migrations
 		/// <inheritdoc />
 		protected override void Down(MigrationBuilder migrationBuilder)
 		{
-			if (migrationBuilder == null)
-				throw new ArgumentNullException(nameof(migrationBuilder));
+			ArgumentNullException.ThrowIfNull(migrationBuilder);
 
 			migrationBuilder.DropForeignKey(
 				name: "FK_Jobs_Instances_InstanceId",

@@ -1,44 +1,50 @@
+﻿using System;
+
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using System;
+
+using Prometheus;
+
 using Tgstation.Server.Api.Models.Internal;
 using Tgstation.Server.Host.Components.Chat;
 using Tgstation.Server.Host.Components.Deployment;
+using Tgstation.Server.Host.Components.Deployment.Remote;
 using Tgstation.Server.Host.Components.Events;
 using Tgstation.Server.Host.Components.Session;
 using Tgstation.Server.Host.Configuration;
 using Tgstation.Server.Host.Core;
 using Tgstation.Server.Host.IO;
 using Tgstation.Server.Host.Jobs;
+using Tgstation.Server.Host.Utils;
 
 namespace Tgstation.Server.Host.Components.Watchdog
 {
 	/// <summary>
-	/// <see cref="IWatchdogFactory"/> for creating <see cref="WindowsWatchdog"/>s.
+	/// <see cref="IWatchdogFactory"/> for creating <see cref="AdvancedWatchdog"/>s.
 	/// </summary>
 	class WindowsWatchdogFactory : WatchdogFactory
 	{
 		/// <summary>
-		/// The <see cref="ISymlinkFactory"/> for the <see cref="WindowsWatchdogFactory"/>.
+		/// The <see cref="IFilesystemLinkFactory"/> for the <see cref="WindowsWatchdogFactory"/>.
 		/// </summary>
-		protected ISymlinkFactory SymlinkFactory { get; }
+		protected IFilesystemLinkFactory LinkFactory { get; }
 
 		/// <summary>
-		/// Initializes a new instance of the <see cref="WindowsWatchdogFactory"/> <see langword="class"/>.
+		/// Initializes a new instance of the <see cref="WindowsWatchdogFactory"/> class.
 		/// </summary>
 		/// <param name="serverControl">The <see cref="IServerControl"/> for the <see cref="WatchdogFactory"/>.</param>
 		/// <param name="loggerFactory">The <see cref="ILoggerFactory"/> for the <see cref="WatchdogFactory"/>.</param>
 		/// <param name="jobManager">The <see cref="IJobManager"/> for the <see cref="WatchdogFactory"/>.</param>
 		/// <param name="asyncDelayer">The <see cref="IAsyncDelayer"/> for the <see cref="WatchdogFactory"/>.</param>
-		/// <param name="symlinkFactory">The value of <see cref="SymlinkFactory"/>.</param>
-		/// <param name="generalConfigurationOptions">The <see cref="IOptions{TOptions}"/> for <see cref="GeneralConfiguration"/> for the <see cref="WatchdogFactory"/>.</param>
+		/// <param name="symlinkFactory">The value of <see cref="LinkFactory"/>.</param>
+		/// <param name="generalConfigurationOptions">The <see cref="IOptionsMonitor{TOptions}"/> for <see cref="GeneralConfiguration"/> for the <see cref="WatchdogFactory"/>.</param>
 		public WindowsWatchdogFactory(
 			IServerControl serverControl,
 			ILoggerFactory loggerFactory,
 			IJobManager jobManager,
 			IAsyncDelayer asyncDelayer,
-			ISymlinkFactory symlinkFactory,
-			IOptions<GeneralConfiguration> generalConfigurationOptions)
+			IFilesystemLinkFactory symlinkFactory,
+			IOptionsMonitor<GeneralConfiguration> generalConfigurationOptions)
 			: base(
 				serverControl,
 				loggerFactory,
@@ -46,7 +52,7 @@ namespace Tgstation.Server.Host.Components.Watchdog
 				asyncDelayer,
 				generalConfigurationOptions)
 		{
-			SymlinkFactory = symlinkFactory ?? throw new ArgumentNullException(nameof(symlinkFactory));
+			LinkFactory = symlinkFactory ?? throw new ArgumentNullException(nameof(symlinkFactory));
 		}
 
 		/// <inheritdoc />
@@ -58,6 +64,8 @@ namespace Tgstation.Server.Host.Components.Watchdog
 			IIOManager gameIOManager,
 			IIOManager diagnosticsIOManager,
 			IEventConsumer eventConsumer,
+			IRemoteDeploymentManagerFactory remoteDeploymentManagerFactory,
+			IMetricFactory metricFactory,
 			Api.Models.Instance instance,
 			DreamDaemonSettings settings)
 			=> new WindowsWatchdog(
@@ -70,8 +78,10 @@ namespace Tgstation.Server.Host.Components.Watchdog
 				AsyncDelayer,
 				diagnosticsIOManager,
 				eventConsumer,
+				remoteDeploymentManagerFactory,
+				metricFactory,
 				gameIOManager,
-				SymlinkFactory,
+				LinkFactory,
 				LoggerFactory.CreateLogger<WindowsWatchdog>(),
 				settings,
 				instance,

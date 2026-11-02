@@ -1,31 +1,49 @@
-using Byond.TopicSender;
-using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
-using Serilog.Context;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
-using System.Net;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using Tgstation.Server.Api;
+
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
+using Newtonsoft.Json;
+
+using Serilog.Context;
+
 using Tgstation.Server.Api.Models;
-using Tgstation.Server.Host.Components.Byond;
+using Tgstation.Server.Api.Rights;
+using Tgstation.Server.Common.Extensions;
 using Tgstation.Server.Host.Components.Chat;
+using Tgstation.Server.Host.Components.Chat.Commands;
 using Tgstation.Server.Host.Components.Deployment;
+using Tgstation.Server.Host.Components.Engine;
+using Tgstation.Server.Host.Components.Events;
 using Tgstation.Server.Host.Components.Interop;
 using Tgstation.Server.Host.Components.Interop.Bridge;
 using Tgstation.Server.Host.Components.Interop.Topic;
+using Tgstation.Server.Host.Extensions;
+using Tgstation.Server.Host.Jobs;
+using Tgstation.Server.Host.Models;
 using Tgstation.Server.Host.System;
+using Tgstation.Server.Host.Utils;
 
 namespace Tgstation.Server.Host.Components.Session
 {
-	/// <inheritdoc />
-	sealed class SessionController : ISessionController, IBridgeHandler, IChannelSink
+#pragma warning disable CA1506
+	/// <inheritdoc cref="ISessionController" />
+	sealed class SessionController : Chunker, ISessionController, IBridgeHandler, IChannelSink
+#pragma warning restore CA1506
 	{
+		/// <summary>
+		/// If calls to <see cref="SendTopicRequest(TopicParameters, CancellationToken)"/> should be trace logged.
+		/// </summary>
+		internal static bool LogTopicRequests { get; set; } = true;
+
 		/// <inheritdoc />
-		public DMApiParameters DMApiParameters => reattachInformation;
+		public DMApiParameters DMApiParameters => ReattachInformation;
 
 		/// <inheritdoc />
 		public ApiValidationStatus ApiValidationStatus
@@ -39,39 +57,142 @@ namespace Tgstation.Server.Host.Components.Session
 		}
 
 		/// <inheritdoc />
-		public Models.CompileJob CompileJob => reattachInformation.Dmb.CompileJob;
+		public Models.CompileJob CompileJob => ReattachInformation.Dmb.CompileJob;
 
 		/// <inheritdoc />
-		public RebootState RebootState => reattachInformation.RebootState;
+		public EngineVersion EngineVersion => ReattachInformation.Dmb.EngineVersion;
 
 		/// <inheritdoc />
-		public Version DMApiVersion { get; private set; }
+		public RebootState RebootState => ReattachInformation.RebootState;
 
 		/// <inheritdoc />
-		public bool ClosePortOnReboot { get; set; }
+		public Version? DMApiVersion { get; private set; }
 
 		/// <inheritdoc />
-		public bool TerminationWasRequested { get; private set; }
+		public bool TerminationWasIntentional => terminationWasIntentionalForced || (Lifetime.IsCompleted && Lifetime.Result == 0);
 
 		/// <inheritdoc />
 		public Task<LaunchResult> LaunchResult { get; }
 
 		/// <inheritdoc />
-		public Task<int> Lifetime { get; }
+		public Task<int?> Lifetime { get; }
+
+		/// <inheritdoc />
+		public Task OnStartup => startupTcs.Task;
 
 		/// <inheritdoc />
 		public Task OnReboot => rebootTcs.Task;
 
 		/// <inheritdoc />
+		public long? StartupBridgeRequestsReceived { get; private set; }
+
+		/// <inheritdoc />
+		public Task RebootGate
+		{
+			get => rebootGate;
+			set
+			{
+				var tcs = new TaskCompletionSource<Task>();
+				async Task Wrap()
+				{
+					var toAwait = await tcs.Task;
+					await toAwait;
+					await value;
+				}
+
+				tcs.SetResult(Interlocked.Exchange(ref rebootGate, Wrap()));
+			}
+		}
+
+		/// <inheritdoc />
 		public Task OnPrime => primeTcs.Task;
 
 		/// <inheritdoc />
-		public bool DMApiAvailable => reattachInformation.Dmb.CompileJob.DMApiVersion?.Major == DMApiConstants.Version.Major;
+		public bool DMApiAvailable => ReattachInformation.Dmb.CompileJob.DMApiVersion?.Major == DMApiConstants.InteropVersion.Major;
+
+		/// <inheritdoc />
+		public bool ProcessingRebootBridgeRequest => rebootBridgeRequestsProcessing > 0;
+
+		/// <inheritdoc />
+		public string DumpFileExtension => engineLock.UseDotnetDump
+			? ".net.dmp"
+			: ".dmp";
 
 		/// <summary>
-		/// The up to date <see cref="ReattachInformation"/>
+		/// The up to date <see cref="Session.ReattachInformation"/>.
 		/// </summary>
-		readonly ReattachInformation reattachInformation;
+		public ReattachInformation ReattachInformation { get; }
+
+		/// <summary>
+		/// The <see cref="FifoSemaphore"/> used to prevent concurrent calls into /world/Topic().
+		/// </summary>
+		public FifoSemaphore TopicSendSemaphore { get; }
+
+		/// <inheritdoc />
+		public long? MemoryUsage => process.MemoryUsage;
+
+		/// <inheritdoc />
+		public DateTimeOffset? LaunchTime => process.LaunchTime;
+
+		/// <summary>
+		/// The <see cref="Byond.TopicSender.ITopicClient"/> for the <see cref="SessionController"/>.
+		/// </summary>
+		readonly Byond.TopicSender.ITopicClient byondTopicSender;
+
+		/// <summary>
+		/// The <see cref="IBridgeRegistration"/> for the <see cref="SessionController"/>.
+		/// </summary>
+		readonly IBridgeRegistration? bridgeRegistration;
+
+		/// <summary>
+		/// The <see cref="IProcess"/> for the <see cref="SessionController"/>.
+		/// </summary>
+		readonly IProcess process;
+
+		/// <summary>
+		/// The <see cref="IEngineExecutableLock"/> for the <see cref="SessionController"/>.
+		/// </summary>
+		readonly IEngineExecutableLock engineLock;
+
+		/// <summary>
+		/// The <see cref="IChatTrackingContext"/> for the <see cref="SessionController"/>.
+		/// </summary>
+		readonly IChatTrackingContext chatTrackingContext;
+
+		/// <summary>
+		/// The <see cref="IChatManager"/> for the <see cref="SessionController"/>.
+		/// </summary>
+		readonly IChatManager chat;
+
+		/// <summary>
+		/// The <see cref="IAsyncDelayer"/> for the <see cref="SessionController"/>.
+		/// </summary>
+		readonly IAsyncDelayer asyncDelayer;
+
+		/// <summary>
+		/// The <see cref="IDotnetDumpService"/> for the <see cref="SessionController"/>.
+		/// </summary>
+		readonly IDotnetDumpService dotnetDumpService;
+
+		/// <summary>
+		/// The <see cref="IEventConsumer"/> for the <see cref="SessionController"/>.
+		/// </summary>
+		readonly IEventConsumer eventConsumer;
+
+		/// <summary>
+		/// The <see cref="IJobManager"/> for the <see cref="SessionController"/>.
+		/// </summary>
+		readonly IJobManager jobManager;
+
+		/// <summary>
+		/// The <see cref="IDreamMaker"/> for the <see cref="SessionController"/>.
+		/// </summary>
+		readonly IDreamMaker dreamMaker;
+
+		/// <summary>
+		/// The <see cref="TaskCompletionSource"/> that completes when DD makes it's first bridge request.
+		/// </summary>
+		readonly TaskCompletionSource initialBridgeRequestTcs;
 
 		/// <summary>
 		/// The <see cref="Instance"/> metadata.
@@ -79,44 +200,9 @@ namespace Tgstation.Server.Host.Components.Session
 		readonly Api.Models.Instance metadata;
 
 		/// <summary>
-		/// A <see cref="CancellationTokenSource"/> used for the topic send operation made on reattaching.
+		/// A <see cref="CancellationTokenSource"/> used for tasks that should not exceed the lifetime of the session.
 		/// </summary>
-		readonly CancellationTokenSource reattachTopicCts;
-
-		/// <summary>
-		/// The <see cref="ITopicClient"/> for the <see cref="SessionController"/>
-		/// </summary>
-		readonly ITopicClient byondTopicSender;
-
-		/// <summary>
-		/// The <see cref="IBridgeRegistration"/> for the <see cref="SessionController"/>
-		/// </summary>
-		readonly IBridgeRegistration bridgeRegistration;
-
-		/// <summary>
-		/// The <see cref="IProcess"/> for the <see cref="SessionController"/>
-		/// </summary>
-		readonly IProcess process;
-
-		/// <summary>
-		/// The <see cref="IByondExecutableLock"/> for the <see cref="SessionController"/>
-		/// </summary>
-		readonly IByondExecutableLock byondLock;
-
-		/// <summary>
-		/// The <see cref="IChatTrackingContext"/> for the <see cref="SessionController"/>
-		/// </summary>
-		readonly IChatTrackingContext chatTrackingContext;
-
-		/// <summary>
-		/// The <see cref="IChatManager"/> for the <see cref="SessionController"/>
-		/// </summary>
-		readonly IChatManager chat;
-
-		/// <summary>
-		/// The <see cref="ILogger"/> for the <see cref="SessionController"/>
-		/// </summary>
-		readonly ILogger<SessionController> logger;
+		readonly CancellationTokenSource sessionDurationCts;
 
 		/// <summary>
 		/// <see langword="lock"/> <see cref="object"/> for port updates and <see cref="disposed"/>.
@@ -124,115 +210,172 @@ namespace Tgstation.Server.Host.Components.Session
 		readonly object synchronizationLock;
 
 		/// <summary>
-		/// The <see cref="TaskCompletionSource{TResult}"/> <see cref="SetPort(ushort, CancellationToken)"/> waits on when DreamDaemon currently has it's ports closed
+		/// If this session is meant to validate the presence of the DMAPI.
 		/// </summary>
-		TaskCompletionSource<bool> portAssignmentTcs;
+		readonly bool apiValidationSession;
 
 		/// <summary>
-		/// The port to assign DreamDaemon when it queries for it
+		/// The <see cref="TaskCompletionSource"/> that completes when DD sends a valid startup bridge request.
 		/// </summary>
-		ushort? nextPort;
+		volatile TaskCompletionSource startupTcs;
 
 		/// <summary>
-		/// The <see cref="TaskCompletionSource{TResult}"/> that completes when DD tells us about a reboot
+		/// The <see cref="TaskCompletionSource"/> that completes when DD tells us about a reboot.
 		/// </summary>
-		TaskCompletionSource<object> rebootTcs;
+		volatile TaskCompletionSource rebootTcs;
 
 		/// <summary>
-		/// The <see cref="TaskCompletionSource{TResult}"/> that completes when DD tells us it's primed.
+		/// The <see cref="TaskCompletionSource"/> that completes when DD tells us it's primed.
 		/// </summary>
-		TaskCompletionSource<object> primeTcs;
+		volatile TaskCompletionSource primeTcs;
 
 		/// <summary>
-		/// If we know DreamDaemon currently has it's port closed
+		/// Backing field for <see cref="RebootGate"/>.
 		/// </summary>
-		bool portClosedForReboot;
+		volatile Task rebootGate;
 
 		/// <summary>
-		/// If the <see cref="SessionController"/> has been disposed
+		/// The <see cref="Task"/> representing calls to <see cref="TriggerCustomEvent(CustomEventInvocation?)"/>.
 		/// </summary>
-		bool disposed;
+		volatile Task customEventProcessingTask;
 
 		/// <summary>
-		/// The <see cref="ApiValidationStatus"/> for the <see cref="SessionController"/>
+		/// <see cref="Task"/> for shutting down the server if it is taking too long after validation.
+		/// </summary>
+		volatile Task? postValidationShutdownTask;
+
+		/// <summary>
+		/// The number of currently active calls to <see cref="ProcessBridgeRequest(BridgeParameters, CancellationToken)"/> from TgsReboot().
+		/// </summary>
+		volatile uint rebootBridgeRequestsProcessing;
+
+		/// <summary>
+		/// The <see cref="ApiValidationStatus"/> for the <see cref="SessionController"/>.
 		/// </summary>
 		ApiValidationStatus apiValidationStatus;
 
 		/// <summary>
-		/// If <see cref="process"/> should be kept alive instead
+		/// If the <see cref="SessionController"/> has been disposed.
+		/// </summary>
+		bool disposed;
+
+		/// <summary>
+		/// If <see cref="process"/> should be kept alive instead.
 		/// </summary>
 		bool released;
 
 		/// <summary>
-		/// Construct a <see cref="SessionController"/>
+		/// Backing field for overriding <see cref="TerminationWasIntentional"/>.
 		/// </summary>
-		/// <param name="reattachInformation">The value of <see cref="reattachInformation"/></param>
+		bool terminationWasIntentionalForced;
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="SessionController"/> class.
+		/// </summary>
+		/// <param name="reattachInformation">The value of <see cref="ReattachInformation"/>.</param>
 		/// <param name="metadata">The owning <see cref="Instance"/>.</param>
-		/// <param name="process">The value of <see cref="process"/></param>
-		/// <param name="byondLock">The value of <see cref="byondLock"/></param>
-		/// <param name="byondTopicSender">The value of <see cref="byondTopicSender"/></param>
+		/// <param name="process">The value of <see cref="process"/>.</param>
+		/// <param name="engineLock">The value of <see cref="engineLock"/>.</param>
+		/// <param name="byondTopicSender">The value of <see cref="byondTopicSender"/>.</param>
 		/// <param name="bridgeRegistrar">The <see cref="IBridgeRegistrar"/> used to populate <see cref="bridgeRegistration"/>.</param>
-		/// <param name="chat">The value of <see cref="chat"/></param>
-		/// <param name="chatTrackingContext">The value of <see cref="chatTrackingContext"/></param>
+		/// <param name="chat">The value of <see cref="chat"/>.</param>
+		/// <param name="chatTrackingContext">The value of <see cref="chatTrackingContext"/>.</param>
 		/// <param name="assemblyInformationProvider">The <see cref="IAssemblyInformationProvider"/> for the <see cref="SessionController"/>.</param>
-		/// <param name="logger">The value of <see cref="logger"/></param>
-		/// <param name="postLifetimeCallback">The <see cref="Func{TResult}"/> returning a <see cref="Task"/> to be run after the <paramref name="process"/> ends.</param>
-		/// <param name="startupTimeout">The optional time to wait before failing the <see cref="LaunchResult"/></param>
+		/// <param name="asyncDelayer">The value of <see cref="asyncDelayer"/>.</param>
+		/// <param name="dotnetDumpService">The value of <see cref="dotnetDumpService"/>.</param>
+		/// <param name="eventConsumer">The value of <see cref="eventConsumer"/>.</param>
+		/// <param name="jobManager">The value of <see cref="jobManager"/>.</param>
+		/// <param name="dreamMaker">The value of <see cref="dreamMaker"/>.</param>
+		/// <param name="logger">The value of <see cref="Chunker.Logger"/>.</param>
+		/// <param name="postLifetimeCallback">The <see cref="Func{TResult}"/> returning a <see cref="ValueTask"/> to be run after the <paramref name="process"/> ends.</param>
+		/// <param name="startupTimeout">The optional time to wait before failing the <see cref="LaunchResult"/>.</param>
 		/// <param name="reattached">If this is a reattached session.</param>
-		/// <param name="apiValidate">If this is a DMAPI validation session.</param>
+		/// <param name="apiValidate">The value of <see cref="apiValidationSession"/>.</param>
 		public SessionController(
 			ReattachInformation reattachInformation,
 			Api.Models.Instance metadata,
 			IProcess process,
-			IByondExecutableLock byondLock,
-			ITopicClient byondTopicSender,
+			IEngineExecutableLock engineLock,
+			Byond.TopicSender.ITopicClient byondTopicSender,
 			IChatTrackingContext chatTrackingContext,
 			IBridgeRegistrar bridgeRegistrar,
 			IChatManager chat,
 			IAssemblyInformationProvider assemblyInformationProvider,
+			IAsyncDelayer asyncDelayer,
+			IDotnetDumpService dotnetDumpService,
+			IEventConsumer eventConsumer,
+			IJobManager jobManager,
+			IDreamMaker dreamMaker,
 			ILogger<SessionController> logger,
-			Func<Task> postLifetimeCallback,
+			Func<ValueTask> postLifetimeCallback,
 			uint? startupTimeout,
 			bool reattached,
 			bool apiValidate)
+			: base(logger)
 		{
-			this.reattachInformation = reattachInformation ?? throw new ArgumentNullException(nameof(reattachInformation));
+			ReattachInformation = reattachInformation ?? throw new ArgumentNullException(nameof(reattachInformation));
 			this.metadata = metadata ?? throw new ArgumentNullException(nameof(metadata));
 			this.process = process ?? throw new ArgumentNullException(nameof(process));
-			this.byondLock = byondLock ?? throw new ArgumentNullException(nameof(byondLock));
+			this.engineLock = engineLock ?? throw new ArgumentNullException(nameof(engineLock));
 			this.byondTopicSender = byondTopicSender ?? throw new ArgumentNullException(nameof(byondTopicSender));
 			this.chatTrackingContext = chatTrackingContext ?? throw new ArgumentNullException(nameof(chatTrackingContext));
-			if (bridgeRegistrar == null)
-				throw new ArgumentNullException(nameof(bridgeRegistrar));
-			this.chat = chat ?? throw new ArgumentNullException(nameof(chat));
-			this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
+			ArgumentNullException.ThrowIfNull(bridgeRegistrar);
 
-			if (apiValidate || DMApiAvailable)
+			this.chat = chat ?? throw new ArgumentNullException(nameof(chat));
+			ArgumentNullException.ThrowIfNull(assemblyInformationProvider);
+
+			this.asyncDelayer = asyncDelayer ?? throw new ArgumentNullException(nameof(asyncDelayer));
+			this.dotnetDumpService = dotnetDumpService ?? throw new ArgumentNullException(nameof(dotnetDumpService));
+			this.eventConsumer = eventConsumer ?? throw new ArgumentNullException(nameof(eventConsumer));
+			this.jobManager = jobManager ?? throw new ArgumentNullException(nameof(jobManager));
+			this.dreamMaker = dreamMaker ?? throw new ArgumentNullException(nameof(dreamMaker));
+
+			apiValidationSession = apiValidate;
+
+			disposed = false;
+			apiValidationStatus = ApiValidationStatus.NeverValidated;
+			released = false;
+
+			startupTcs = new TaskCompletionSource();
+			rebootTcs = new TaskCompletionSource();
+			primeTcs = new TaskCompletionSource();
+
+			rebootGate = Task.CompletedTask;
+			customEventProcessingTask = Task.CompletedTask;
+
+			// Run this asynchronously because we want to try to avoid any effects sending topics to the server while the initial bridge request is processing
+			// It MAY be the source of a DD crash. See this gist https://gist.github.com/Cyberboss/7776bbeff3a957d76affe0eae95c9f14
+			// Worth further investigation as to if that sequence of events is a reliable crash vector and opening a BYOND bug if it is
+			initialBridgeRequestTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+			sessionDurationCts = new CancellationTokenSource();
+
+			TopicSendSemaphore = new FifoSemaphore();
+			synchronizationLock = new object();
+
+			if (DMApiAvailable)
+			{
+				StartupBridgeRequestsReceived = 0;
+			}
+
+			if (apiValidationSession || DMApiAvailable)
 			{
 				bridgeRegistration = bridgeRegistrar.RegisterHandler(this);
 				this.chatTrackingContext.SetChannelSink(this);
 			}
 			else
 				logger.LogTrace(
-					"Not registering session with {0} DMAPI version for interop!",
+					"Not registering session with {reasonWhyDmApiIsBad} DMAPI version for interop!",
 					reattachInformation.Dmb.CompileJob.DMApiVersion == null
 						? "no"
 						: $"incompatible ({reattachInformation.Dmb.CompileJob.DMApiVersion})");
 
-			portClosedForReboot = false;
-			disposed = false;
-			apiValidationStatus = ApiValidationStatus.NeverValidated;
-			released = false;
-
-			rebootTcs = new TaskCompletionSource<object>();
-			primeTcs = new TaskCompletionSource<object>();
-			reattachTopicCts = new CancellationTokenSource();
-			synchronizationLock = new object();
-
-			async Task<int> WrapLifetime()
+			async Task<int?> WrapLifetime()
 			{
-				var exitCode = await process.Lifetime.ConfigureAwait(false);
-				await postLifetimeCallback().ConfigureAwait(false);
+				var exitCode = await process.Lifetime;
+				await postLifetimeCallback();
+				if (postValidationShutdownTask != null)
+					await postValidationShutdownTask;
+
 				return exitCode;
 			}
 
@@ -240,11 +383,13 @@ namespace Tgstation.Server.Host.Components.Session
 
 			LaunchResult = GetLaunchResult(
 				assemblyInformationProvider,
+				asyncDelayer,
 				startupTimeout,
-				reattached);
+				reattached,
+				apiValidate);
 
 			logger.LogDebug(
-				"Created session controller. CommsKey: {0}, Port: {1}",
+				"Created session controller. CommsKey: {accessIdentifier}, Port: {port}",
 				reattachInformation.AccessIdentifier,
 				reattachInformation.Port);
 		}
@@ -259,428 +404,875 @@ namespace Tgstation.Server.Host.Components.Session
 				disposed = true;
 			}
 
-			logger.LogTrace("Disposing...");
+			Logger.LogTrace("Disposing...");
+
+			sessionDurationCts.Cancel();
+			var cancellationToken = CancellationToken.None; // DCT: None available
+			var semaphoreLockTask = TopicSendSemaphore.Lock(cancellationToken);
+
 			if (!released)
 			{
-				process.Terminate();
-				byondLock.Dispose();
+				await engineLock.StopServerProcess(
+					Logger,
+					process,
+					ReattachInformation.AccessIdentifier,
+					ReattachInformation.Port,
+					cancellationToken);
 			}
 
-			process.Dispose();
+			await process.DisposeAsync();
+			engineLock.Dispose();
 			bridgeRegistration?.Dispose();
-			reattachInformation.Dmb?.Dispose(); // will be null when released
+			var regularDmbDisposeTask = ReattachInformation.Dmb.DisposeAsync();
+			var initialDmb = ReattachInformation.InitialDmb;
+			if (initialDmb != null)
+				await initialDmb.DisposeAsync();
+
+			await regularDmbDisposeTask;
+
 			chatTrackingContext.Dispose();
-			reattachTopicCts.Dispose();
+			sessionDurationCts.Dispose();
 
 			if (!released)
-			{
-				// finish the async callback
-				await Lifetime.ConfigureAwait(false);
-			}
-		}
+				await Lifetime; // finish the async callback
 
-		/// <summary>
-		/// The <see cref="Task{TResult}"/> for <see cref="LaunchResult"/>.
-		/// </summary>
-		/// <param name="assemblyInformationProvider">The <see cref="IAssemblyInformationProvider"/>.</param>
-		/// <param name="startupTimeout">The, optional, startup timeout in seconds.</param>
-		/// <param name="reattached">If DreamDaemon was reattached.</param>
-		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="Session.LaunchResult"/> for the operation.</returns>
-		async Task<LaunchResult> GetLaunchResult(
-			IAssemblyInformationProvider assemblyInformationProvider,
-			uint? startupTimeout,
-			bool reattached)
-		{
-			var startTime = DateTimeOffset.Now;
-			Task toAwait = process.Startup;
+			(await semaphoreLockTask).Dispose();
+			TopicSendSemaphore.Dispose();
 
-			if (startupTimeout.HasValue)
-				toAwait = Task.WhenAny(process.Startup, Task.Delay(startTime.AddSeconds(startupTimeout.Value) - startTime));
-
-			await toAwait.ConfigureAwait(false);
-
-			var result = new LaunchResult
-			{
-				ExitCode = process.Lifetime.IsCompleted ? (int?)await process.Lifetime.ConfigureAwait(false) : null,
-				StartupTime = process.Startup.IsCompleted ? (TimeSpan?)(DateTimeOffset.Now - startTime) : null
-			};
-
-			logger.LogTrace("Launch result: {0}", result);
-
-			if (!result.ExitCode.HasValue && reattached && !disposed)
-			{
-				var reattachResponse = await SendCommand(
-					new TopicParameters(
-						assemblyInformationProvider.Version,
-						reattachInformation.RuntimeInformation.ServerPort),
-					reattachTopicCts.Token)
-					.ConfigureAwait(false);
-
-				if (reattachResponse != null)
-				{
-					if (reattachResponse.InteropResponse?.CustomCommands != null)
-						chatTrackingContext.CustomCommands = reattachResponse.InteropResponse.CustomCommands;
-					else if (reattachResponse.InteropResponse != null)
-						logger.LogWarning(
-							"DMAPI v{0} isn't returning the TGS custom commands list. Functionality added in v5.2.0.",
-							CompileJob.DMApiVersion.Semver());
-				}
-			}
-
-			return result;
+			await customEventProcessingTask;
 		}
 
 		/// <inheritdoc />
-		public async Task<BridgeResponse> ProcessBridgeRequest(BridgeParameters parameters, CancellationToken cancellationToken)
+		public async ValueTask<BridgeResponse?> ProcessBridgeRequest(BridgeParameters parameters, CancellationToken cancellationToken)
 		{
-			if (parameters == null)
-				throw new ArgumentNullException(nameof(parameters));
+			ArgumentNullException.ThrowIfNull(parameters);
 
-			using (LogContext.PushProperty("Instance", metadata.Id))
+			using (LogContext.PushProperty(SerilogContextHelper.InstanceIdContextProperty, metadata.Id))
 			{
-				logger.LogTrace("Handling bridge request...");
-				var response = new BridgeResponse();
-				switch (parameters.CommandType)
+				if (!DMApiAvailable && !apiValidationSession)
 				{
-					case BridgeCommandType.ChatSend:
-						if (parameters.ChatMessage == null)
-							return new BridgeResponse
-							{
-								ErrorMessage = "Missing chatMessage field!"
-							};
-
-						if (parameters.ChatMessage.ChannelIds == null)
-							return new BridgeResponse
-							{
-								ErrorMessage = "Missing channelIds field in chatMessage!"
-							};
-
-						if (parameters.ChatMessage.ChannelIds.Any(channelIdString => !UInt64.TryParse(channelIdString, out var _)))
-							return new BridgeResponse
-							{
-								ErrorMessage = "Invalid channelIds in chatMessage!"
-							};
-
-						if (parameters.ChatMessage.Text == null)
-							return new BridgeResponse
-							{
-								ErrorMessage = "Missing message field in chatMessage!"
-							};
-
-						await chat.SendMessage(
-							parameters.ChatMessage.Text,
-							parameters.ChatMessage.ChannelIds.Select(UInt64.Parse),
-							cancellationToken)
-							.ConfigureAwait(false);
-						break;
-					case BridgeCommandType.Prime:
-						var oldPrimeTcs = primeTcs;
-						primeTcs = new TaskCompletionSource<object>();
-						oldPrimeTcs.SetResult(null);
-						break;
-					case BridgeCommandType.Kill:
-						logger.LogInformation("Bridge requested process termination!");
-						TerminationWasRequested = true;
-						process.Terminate();
-						break;
-					case BridgeCommandType.PortUpdate:
-						lock (synchronizationLock)
-						{
-							if (!parameters.CurrentPort.HasValue)
-							{
-								/////UHHHH
-								logger.LogWarning("DreamDaemon sent new port command without providing it's own!");
-								return new BridgeResponse
-								{
-									ErrorMessage = "Missing stringified port as data parameter!"
-								};
-							}
-
-							var currentPort = parameters.CurrentPort.Value;
-							if (!nextPort.HasValue)
-								reattachInformation.Port = parameters.CurrentPort.Value; // not ready yet, so what we'll do is accept the random port DD opened on for now and change it later when we decide to
-							else
-							{
-								// nextPort is ready, tell DD to switch to that
-								// if it fails it'll kill itself
-								response.NewPort = nextPort.Value;
-								reattachInformation.Port = nextPort.Value;
-								nextPort = null;
-
-								// we'll also get here from SetPort so complete that task
-								var tmpTcs = portAssignmentTcs;
-								portAssignmentTcs = null;
-								tmpTcs.SetResult(true);
-							}
-
-							portClosedForReboot = false;
-						}
-
-						break;
-					case BridgeCommandType.Startup:
-						apiValidationStatus = ApiValidationStatus.BadValidationRequest;
-						if (parameters.Version == null)
-							return new BridgeResponse
-							{
-								ErrorMessage = "Missing dmApiVersion field!"
-							};
-
-						DMApiVersion = parameters.Version;
-						if (DMApiVersion.Major != DMApiConstants.Version.Major)
-						{
-							apiValidationStatus = ApiValidationStatus.Incompatible;
-							return new BridgeResponse
-							{
-								ErrorMessage = "Incompatible dmApiVersion!"
-							};
-						}
-
-						switch (parameters.MinimumSecurityLevel)
-						{
-							case DreamDaemonSecurity.Ultrasafe:
-								apiValidationStatus = ApiValidationStatus.RequiresUltrasafe;
-								break;
-							case DreamDaemonSecurity.Safe:
-								apiValidationStatus = ApiValidationStatus.RequiresSafe;
-								break;
-							case DreamDaemonSecurity.Trusted:
-								apiValidationStatus = ApiValidationStatus.RequiresTrusted;
-								break;
-							case null:
-								return new BridgeResponse
-								{
-									ErrorMessage = "Missing minimumSecurityLevel field!"
-								};
-							default:
-								return new BridgeResponse
-								{
-									ErrorMessage = "Invalid minimumSecurityLevel!"
-								};
-						}
-
-						response.RuntimeInformation = reattachInformation.RuntimeInformation;
-
-						// Load custom commands
-						chatTrackingContext.CustomCommands = parameters.CustomCommands;
-						break;
-					case BridgeCommandType.Reboot:
-						if (ClosePortOnReboot)
-						{
-							chatTrackingContext.Active = false;
-							response.NewPort = 0;
-							portClosedForReboot = true;
-						}
-
-						var oldRebootTcs = rebootTcs;
-						rebootTcs = new TaskCompletionSource<object>();
-						oldRebootTcs.SetResult(null);
-						break;
-					case null:
-						response.ErrorMessage = "Missing commandType!";
-						break;
-					default:
-						response.ErrorMessage = "Requested commandType not supported!";
-						break;
+					Logger.LogWarning("Ignoring bridge request from session without confirmed DMAPI!");
+					return null;
 				}
 
-				return response;
+				Logger.LogTrace("Handling bridge request...");
+
+				try
+				{
+					return await ProcessBridgeCommand(parameters, cancellationToken);
+				}
+				finally
+				{
+					initialBridgeRequestTcs.TrySetResult();
+				}
 			}
 		}
 
-		/// <summary>
-		/// Throws an <see cref="ObjectDisposedException"/> if <see cref="DisposeAsync"/> has been called
-		/// </summary>
-		void CheckDisposed()
-		{
-			if (disposed)
-				throw new ObjectDisposedException(nameof(SessionController));
-		}
-
 		/// <inheritdoc />
-		public void EnableCustomChatCommands() => chatTrackingContext.Active = DMApiAvailable;
-
-		/// <inheritdoc />
-		public async Task<ReattachInformation> Release()
+		public ValueTask Release()
 		{
 			CheckDisposed();
 
-			// we still don't want to dispose the dmb yet, even though we're keeping it alive
-			var tmpProvider = reattachInformation.Dmb;
-			reattachInformation.Dmb = null;
+			ReattachInformation.Dmb.KeepAlive();
+			ReattachInformation.InitialDmb?.KeepAlive();
+			engineLock.DoNotDeleteThisSession();
 			released = true;
-			await DisposeAsync().ConfigureAwait(false);
-			byondLock.DoNotDeleteThisSession();
-			tmpProvider.KeepAlive();
-			reattachInformation.Dmb = tmpProvider;
-			return reattachInformation;
+			return DisposeAsync();
 		}
 
 		/// <inheritdoc />
-		public async Task<CombinedTopicResponse> SendCommand(TopicParameters parameters, CancellationToken cancellationToken)
-		{
-			if (parameters == null)
-				throw new ArgumentNullException(nameof(parameters));
-
-			if (Lifetime.IsCompleted)
-			{
-				logger.LogWarning(
-					"Attempted to send a command to an inactive SessionController: {0}",
-					parameters.CommandType);
-				return null;
-			}
-
-			if (!DMApiAvailable)
-			{
-				logger.LogTrace("Not sending topic request {0} to server without/with incompatible DMAPI!", parameters.CommandType);
-				return null;
-			}
-
-			parameters.AccessIdentifier = reattachInformation.AccessIdentifier;
-
-			var json = JsonConvert.SerializeObject(parameters, DMApiConstants.SerializerSettings);
-			logger.LogTrace("Topic request: {0}", json);
-			try
-			{
-				var commandString = String.Format(CultureInfo.InvariantCulture,
-					"?{0}={1}",
-					byondTopicSender.SanitizeString(DMApiConstants.TopicData),
-					byondTopicSender.SanitizeString(json));
-
-				var targetPort = reattachInformation.Port;
-
-				var topicResponse = await byondTopicSender.SendTopic(
-					new IPEndPoint(IPAddress.Loopback, targetPort),
-					commandString,
-					cancellationToken).ConfigureAwait(false);
-
-				var topicReturn = topicResponse.StringData;
-
-				Interop.Topic.TopicResponse interopResponse = null;
-				if (topicReturn != null)
-					try
-					{
-						interopResponse = JsonConvert.DeserializeObject<Interop.Topic.TopicResponse>(topicReturn, DMApiConstants.SerializerSettings);
-						if (interopResponse.ErrorMessage != null)
-						{
-							logger.LogWarning("Errored topic response for command {0}: {1}", parameters.CommandType, interopResponse.ErrorMessage);
-						}
-
-						logger.LogTrace("Interop response: {0}", topicReturn);
-					}
-					catch(Exception ex)
-					{
-						logger.LogWarning(ex, "Invalid interop response: {0}", topicReturn);
-					}
-
-				return new CombinedTopicResponse(topicResponse, interopResponse);
-			}
-			catch (OperationCanceledException ex)
-			{
-				logger.LogTrace(
-					ex,
-					"Topic request {0}!",
-					cancellationToken.IsCancellationRequested
-						? "aborted"
-						: "timed out");
-				cancellationToken.ThrowIfCancellationRequested();
-			}
-			catch (Exception e)
-			{
-				logger.LogWarning(e, "Send command exception!");
-			}
-
-			return null;
-		}
+		public ValueTask<TopicResponse?> SendCommand(TopicParameters parameters, CancellationToken cancellationToken)
+			=> SendCommand(parameters, false, cancellationToken);
 
 		/// <inheritdoc />
-		public Task<bool> SetPort(ushort port, CancellationToken cancellationToken)
-		{
-			CheckDisposed();
-
-			if (port == 0)
-				throw new ArgumentOutOfRangeException(nameof(port), port, "port must not be zero!");
-
-			async Task<bool> ImmediateTopicPortChange()
-			{
-				var commandResult = await SendCommand(
-					new TopicParameters(port),
-					cancellationToken)
-					.ConfigureAwait(false);
-
-				if (commandResult.InteropResponse?.ErrorMessage != null)
-					return false;
-
-				reattachInformation.Port = port;
-				return true;
-			}
-
-			lock (synchronizationLock)
-				if (portClosedForReboot)
-				{
-					if (portAssignmentTcs != null)
-						throw new InvalidOperationException("A port change operation is already in progress!");
-					nextPort = port;
-					portAssignmentTcs = new TaskCompletionSource<bool>();
-					return portAssignmentTcs.Task;
-				}
-				else
-					return ImmediateTopicPortChange();
-		}
-
-		/// <inheritdoc />
-		public async Task<bool> SetRebootState(RebootState newRebootState, CancellationToken cancellationToken)
+		public async ValueTask<bool> SetRebootState(RebootState newRebootState, CancellationToken cancellationToken)
 		{
 			if (RebootState == newRebootState)
 				return true;
 
-			logger.LogTrace("Changing reboot state to {0}", newRebootState);
+			Logger.LogTrace("Changing reboot state to {newRebootState}", newRebootState);
 
-			reattachInformation.RebootState = newRebootState;
+			ReattachInformation.RebootState = newRebootState;
 			var result = await SendCommand(
 				new TopicParameters(newRebootState),
-				cancellationToken)
-				.ConfigureAwait(false);
+				cancellationToken);
 
-			return result?.InteropResponse != null && result.InteropResponse?.ErrorMessage == null;
+			return result != null && result.ErrorMessage == null;
 		}
 
 		/// <inheritdoc />
 		public void ResetRebootState()
 		{
 			CheckDisposed();
-			logger.LogTrace("Resetting reboot state...");
-			reattachInformation.RebootState = RebootState.Normal;
+			Logger.LogTrace("Resetting reboot state...");
+			ReattachInformation.RebootState = RebootState.Normal;
 		}
 
 		/// <inheritdoc />
-		public void SetHighPriority() => process.SetHighPriority();
+		public void AdjustPriority(bool higher) => process.AdjustPriority(higher);
 
 		/// <inheritdoc />
-		public void Suspend() => process.Suspend();
+		public void SuspendProcess() => process.SuspendProcess();
 
 		/// <inheritdoc />
-		public void Resume() => process.Resume();
+		public void ResumeProcess() => process.ResumeProcess();
 
 		/// <inheritdoc />
-		public void ReplaceDmbProvider(IDmbProvider dmbProvider)
+		public IAsyncDisposable ReplaceDmbProvider(IDmbProvider dmbProvider)
 		{
-			var oldDmb = reattachInformation.Dmb;
-			reattachInformation.Dmb = dmbProvider ?? throw new ArgumentNullException(nameof(dmbProvider));
-			oldDmb.Dispose();
+			var oldDmb = ReattachInformation.Dmb;
+			ReattachInformation.Dmb = dmbProvider ?? throw new ArgumentNullException(nameof(dmbProvider));
+			return oldDmb;
 		}
 
 		/// <inheritdoc />
-		public Task InstanceRenamed(string newInstanceName, CancellationToken cancellationToken)
-			=> SendCommand(new TopicParameters(newInstanceName), cancellationToken);
+		public async ValueTask InstanceRenamed(string newInstanceName, CancellationToken cancellationToken)
+		{
+			var runtimeInformation = ReattachInformation.RuntimeInformation;
+			if (runtimeInformation != null)
+				runtimeInformation.InstanceName = newInstanceName;
+
+			await SendCommand(
+				TopicParameters.CreateInstanceRenamedTopicParameters(newInstanceName),
+				cancellationToken);
+		}
 
 		/// <inheritdoc />
-		public Task UpdateChannels(IEnumerable<ChannelRepresentation> newChannels, CancellationToken cancellationToken)
-			=> SendCommand(
+		public async ValueTask UpdateChannels(IEnumerable<ChannelRepresentation> newChannels, CancellationToken cancellationToken)
+			=> await SendCommand(
 				new TopicParameters(
 					new ChatUpdate(newChannels)),
 				cancellationToken);
 
 		/// <inheritdoc />
-		public Task CreateDump(string outputFile, CancellationToken cancellationToken) => process.CreateDump(outputFile, cancellationToken);
+		public ValueTask CreateDump(string outputFile, bool minidump, CancellationToken cancellationToken)
+		{
+			if (engineLock.UseDotnetDump)
+				return dotnetDumpService.Dump(process, outputFile, minidump, cancellationToken);
+
+			return process.CreateDump(outputFile, minidump, cancellationToken);
+		}
+
+		/// <inheritdoc />
+		public double MeasureProcessorTimeDelta()
+			=> process.MeasureProcessorTimeDelta();
+
+		/// <summary>
+		/// The <see cref="Task{TResult}"/> for <see cref="LaunchResult"/>.
+		/// </summary>
+		/// <param name="assemblyInformationProvider">The <see cref="IAssemblyInformationProvider"/>.</param>
+		/// <param name="asyncDelayer">The <see cref="IAsyncDelayer"/>.</param>
+		/// <param name="startupTimeout">The, optional, startup timeout in seconds.</param>
+		/// <param name="reattached">If DreamDaemon was reattached.</param>
+		/// <param name="apiValidate">If this is a DMAPI validation session.</param>
+		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="Session.LaunchResult"/> for the operation.</returns>
+		async Task<LaunchResult> GetLaunchResult(
+			IAssemblyInformationProvider assemblyInformationProvider,
+			IAsyncDelayer asyncDelayer,
+			uint? startupTimeout,
+			bool reattached,
+			bool apiValidate)
+		{
+			var startTime = DateTimeOffset.UtcNow;
+			var useBridgeRequestForLaunchResult = !reattached && (apiValidate || DMApiAvailable);
+			var startupTask = useBridgeRequestForLaunchResult
+				? initialBridgeRequestTcs.Task
+				: process.Startup;
+			var toAwait = Task.WhenAny(startupTask, process.Lifetime);
+
+			if (startupTimeout.HasValue)
+				toAwait = Task.WhenAny(
+					toAwait,
+					asyncDelayer.Delay(
+						TimeSpan.FromSeconds(startupTimeout.Value),
+						CancellationToken.None)
+					.AsTask()); // DCT: None available, task will clean up after delay
+
+			Logger.LogTrace(
+				"Waiting for LaunchResult based on {launchResultCompletionCause}{possibleTimeout}...",
+				useBridgeRequestForLaunchResult ? "initial bridge request" : "process startup",
+				startupTimeout.HasValue ? $" with a timeout of {startupTimeout.Value}s" : String.Empty);
+
+			await toAwait;
+
+			var result = new LaunchResult
+			{
+				ExitCode = process.Lifetime.IsCompleted ? await process.Lifetime : null,
+				StartupTime = startupTask.IsCompleted ? (DateTimeOffset.UtcNow - startTime) : null,
+			};
+
+			Logger.LogTrace("Launch result: {launchResult}", result);
+
+			if (!result.ExitCode.HasValue && reattached && !disposed)
+			{
+				var reattachResponse = await SendCommand(
+					new TopicParameters(
+						assemblyInformationProvider.Version,
+						ReattachInformation.RuntimeInformation!.ServerPort),
+					true,
+					sessionDurationCts.Token);
+
+				if (reattachResponse != null)
+				{
+					if (reattachResponse?.CustomCommands != null)
+						chatTrackingContext.CustomCommands = reattachResponse.CustomCommands;
+					else if (reattachResponse != null)
+						Logger.Log(
+							CompileJob.DMApiVersion >= new Version(5, 2, 0)
+								? LogLevel.Warning
+								: LogLevel.Debug,
+							"DMAPI Interop v{interopVersion} isn't returning the TGS custom commands list. Functionality added in v5.2.0.",
+							CompileJob.DMApiVersion!.Semver());
+				}
+			}
+
+			return result;
+		}
+
+		/// <summary>
+		/// Throws an <see cref="ObjectDisposedException"/> if <see cref="DisposeAsync"/> has been called.
+		/// </summary>
+		void CheckDisposed() => ObjectDisposedException.ThrowIf(disposed, this);
+
+		/// <summary>
+		/// Terminates the server after ten seconds if it does not exit.
+		/// </summary>
+		/// <param name="proceedTask">A <see cref="Task{TResult}"/> that this method <see langword="await"/>s before executing. If the <see cref="Task{TResult}.Result"/> is <see langword="false"/>, this method will return immediately.</param>
+		/// <returns>A <see cref="Task"/> representing the running operation.</returns>
+		async Task PostValidationShutdown(Task<bool> proceedTask)
+		{
+			Logger.LogTrace("Entered post validation terminate task.");
+			if (!await proceedTask)
+			{
+				Logger.LogTrace("Not running post validation terminate task for repeated bridge request.");
+				return;
+			}
+
+			const int GracePeriodSeconds = 30;
+			Logger.LogDebug("Server will terminated in {gracePeriodSeconds}s if it does not exit...", GracePeriodSeconds);
+			var delayTask = asyncDelayer.Delay(TimeSpan.FromSeconds(GracePeriodSeconds), CancellationToken.None).AsTask(); // DCT: None available
+			await Task.WhenAny(process.Lifetime, delayTask);
+
+			if (!process.Lifetime.IsCompleted)
+			{
+				Logger.LogWarning("DMAPI took too long to shutdown server after validation request!");
+				process.Terminate();
+				apiValidationStatus = ApiValidationStatus.BadValidationRequest;
+			}
+			else
+				Logger.LogTrace("Server exited properly post validation.");
+		}
+
+		/// <summary>
+		/// Handle a set of bridge <paramref name="parameters"/>.
+		/// </summary>
+		/// <param name="parameters">The <see cref="BridgeParameters"/> to handle.</param>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the <see cref="BridgeResponse"/> for the request or <see langword="null"/> if the request could not be dispatched.</returns>
+#pragma warning disable CA1502 // TODO: Decomplexify
+#pragma warning disable CA1506
+		async ValueTask<BridgeResponse?> ProcessBridgeCommand(BridgeParameters parameters, CancellationToken cancellationToken)
+		{
+			var response = new BridgeResponse();
+			switch (parameters.CommandType)
+			{
+				case BridgeCommandType.ChatSend:
+					if (parameters.ChatMessage == null)
+						return BridgeError("Missing chatMessage field!");
+
+					if (parameters.ChatMessage.ChannelIds == null)
+						return BridgeError("Missing channelIds field in chatMessage!");
+
+					if (parameters.ChatMessage.ChannelIds.Any(channelIdString => !UInt64.TryParse(channelIdString, out var _)))
+						return BridgeError("Invalid channelIds in chatMessage!");
+
+					if (parameters.ChatMessage.Text == null)
+						return BridgeError("Missing message field in chatMessage!");
+
+					var anyFailed = false;
+					var parsedChannels = parameters.ChatMessage.ChannelIds.Select(
+						channelString =>
+						{
+							anyFailed |= !UInt64.TryParse(channelString, out var channelId);
+							return channelId;
+						});
+
+					if (anyFailed)
+						return BridgeError("Failed to parse channelIds as U64!");
+
+					chat.QueueMessage(
+						parameters.ChatMessage,
+						parsedChannels);
+					break;
+				case BridgeCommandType.Prime:
+					Interlocked.Exchange(ref primeTcs, new TaskCompletionSource()).SetResult();
+					break;
+				case BridgeCommandType.Kill:
+					Logger.LogInformation("Bridge requested process termination!");
+					chatTrackingContext.Active = false;
+					terminationWasIntentionalForced = true;
+					process.Terminate();
+					break;
+				case BridgeCommandType.DeprecatedPortUpdate:
+					return BridgeError("Port switching is no longer supported!");
+				case BridgeCommandType.Startup:
+					apiValidationStatus = ApiValidationStatus.BadValidationRequest;
+					++StartupBridgeRequestsReceived;
+
+					if (apiValidationSession)
+					{
+						var proceedTcs = new TaskCompletionSource<bool>();
+						var firstValidationRequest = Interlocked.CompareExchange(ref postValidationShutdownTask, PostValidationShutdown(proceedTcs.Task), null) == null;
+						proceedTcs.SetResult(firstValidationRequest);
+
+						if (!firstValidationRequest)
+							return BridgeError("Startup bridge request was repeated!");
+					}
+
+					if (parameters.Version == null)
+						return BridgeError("Missing dmApiVersion field!");
+
+					DMApiVersion = parameters.Version;
+
+					// TODO: When OD figures out how to unite port and topic_port, set an upper version bound on OD for this check
+					if (DMApiVersion.Major != DMApiConstants.InteropVersion.Major
+						|| (EngineVersion.Engine == EngineType.OpenDream && DMApiVersion < new Version(5, 7)))
+					{
+						apiValidationStatus = ApiValidationStatus.Incompatible;
+						return BridgeError("Incompatible dmApiVersion!");
+					}
+
+					switch (parameters.MinimumSecurityLevel)
+					{
+						case DreamDaemonSecurity.Ultrasafe:
+							apiValidationStatus = ApiValidationStatus.RequiresUltrasafe;
+							break;
+						case DreamDaemonSecurity.Safe:
+							apiValidationStatus = ApiValidationStatus.RequiresSafe;
+							break;
+						case DreamDaemonSecurity.Trusted:
+							apiValidationStatus = ApiValidationStatus.RequiresTrusted;
+							break;
+						case null:
+							return BridgeError("Missing minimumSecurityLevel field!");
+						default:
+							return BridgeError("Invalid minimumSecurityLevel!");
+					}
+
+					Logger.LogTrace("ApiValidationStatus set to {apiValidationStatus}", apiValidationStatus);
+
+					// we create new runtime info here because of potential .Dmb changes (i think. i forget...)
+					response.RuntimeInformation = new RuntimeInformation(
+						chatTrackingContext,
+						ReattachInformation.Dmb,
+						ReattachInformation.RuntimeInformation!.ServerVersion,
+						ReattachInformation.RuntimeInformation.InstanceName,
+						ReattachInformation.RuntimeInformation.SecurityLevel,
+						ReattachInformation.RuntimeInformation.Visibility,
+						ReattachInformation.RuntimeInformation.ServerPort,
+						ReattachInformation.RuntimeInformation.ApiValidateOnly);
+
+					if (parameters.TopicPort.HasValue)
+					{
+						var newTopicPort = parameters.TopicPort.Value;
+						Logger.LogInformation("Server is requesting use of port {topicPort} for topic communications", newTopicPort);
+						ReattachInformation.TopicPort = newTopicPort;
+					}
+
+					// Load custom commands
+					chatTrackingContext.CustomCommands = parameters.CustomCommands ?? Array.Empty<CustomCommand>();
+					chatTrackingContext.Active = true;
+					Interlocked.Exchange(ref startupTcs, new TaskCompletionSource()).SetResult();
+					break;
+				case BridgeCommandType.Reboot:
+					Interlocked.Increment(ref rebootBridgeRequestsProcessing);
+					try
+					{
+						chatTrackingContext.Active = false;
+						var rebootGate = RebootGate; // Important to read this before setting the TCS or it could change
+						Interlocked.Exchange(ref rebootTcs, new TaskCompletionSource()).SetResult();
+						await rebootGate.WaitAsync(cancellationToken);
+					}
+					finally
+					{
+						Interlocked.Decrement(ref rebootBridgeRequestsProcessing);
+					}
+
+					break;
+				case BridgeCommandType.Chunk:
+					return await ProcessChunk<BridgeParameters, BridgeResponse>(ProcessBridgeCommand, BridgeError, parameters.Chunk, cancellationToken);
+				case BridgeCommandType.Event:
+					return TriggerCustomEvent(parameters.EventInvocation);
+				case BridgeCommandType.Deploy:
+					var job = Job.Create(JobCode.AutomaticDeployment, null, metadata, DreamMakerRights.CancelCompile);
+					await jobManager.RegisterOperation(
+						job,
+						(core, databaseContextFactory, job, progressReporter, jobCancellationToken) =>
+							dreamMaker.DeploymentProcess(
+								job,
+								databaseContextFactory,
+								progressReporter,
+								jobCancellationToken),
+						cancellationToken);
+
+					break;
+				case null:
+					return BridgeError("Missing commandType!");
+				default:
+					return BridgeError($"commandType {parameters.CommandType} not supported!");
+			}
+
+			return response;
+		}
+#pragma warning restore CA1506
+#pragma warning restore CA1502
+
+		/// <summary>
+		/// Log and return a <see cref="BridgeResponse"/> for a given <paramref name="message"/>.
+		/// </summary>
+		/// <param name="message">The error message.</param>
+		/// <returns>A new errored <see cref="BridgeResponse"/>.</returns>
+		BridgeResponse BridgeError(string message)
+		{
+			Logger.LogWarning("Bridge request error: {message}", message);
+			return new BridgeResponse
+			{
+				ErrorMessage = message,
+			};
+		}
+
+		/// <summary>
+		/// Send a topic request for given <paramref name="parameters"/> to DreamDaemon, chunking it if necessary.
+		/// </summary>
+		/// <param name="parameters">The <see cref="TopicParameters"/> to send.</param>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the <see cref="CombinedTopicResponse"/> of the topic request.</returns>
+		async ValueTask<CombinedTopicResponse?> SendTopicRequest(TopicParameters parameters, CancellationToken cancellationToken)
+		{
+			parameters.AccessIdentifier = ReattachInformation.AccessIdentifier;
+
+			var fullCommandString = GenerateQueryString(parameters, out var json);
+			if (LogTopicRequests)
+				Logger.LogTrace("Topic request: {json}", json);
+			var fullCommandByteCount = Encoding.UTF8.GetByteCount(fullCommandString);
+			var topicPriority = parameters.IsPriority;
+			if (fullCommandByteCount <= DMApiConstants.MaximumTopicRequestLength)
+				return await SendRawTopic(fullCommandString, topicPriority, cancellationToken);
+
+			var interopChunkingVersion = new Version(5, 6, 0);
+			if (ReattachInformation.Dmb.CompileJob.DMApiVersion < interopChunkingVersion)
+			{
+				Logger.LogWarning(
+					"Cannot send topic request as it is exceeds the single request limit of {limitBytes}B ({actualBytes}B) and requires chunking and the current compile job's interop version must be at least {chunkingVersionRequired}!",
+					DMApiConstants.MaximumTopicRequestLength,
+					fullCommandByteCount,
+					interopChunkingVersion);
+				return null;
+			}
+
+			var payloadId = NextPayloadId;
+
+			// AccessIdentifer is just noise in a chunked request
+			parameters.AccessIdentifier = null!;
+			GenerateQueryString(parameters, out json);
+
+			// yes, this straight up ignores unicode, precalculating it is useless when we don't
+			// even know if the UTF8 bytes of the url encoded chunk will fit the window until we do said encoding
+			var fullPayloadSize = (uint)json.Length;
+
+			List<string>? chunkQueryStrings = null;
+			for (var chunkCount = 2; chunkQueryStrings == null; ++chunkCount)
+			{
+				var standardChunkSize = fullPayloadSize / chunkCount;
+				var bigChunkSize = standardChunkSize + (fullPayloadSize % chunkCount);
+				if (bigChunkSize > DMApiConstants.MaximumTopicRequestLength)
+					continue;
+
+				chunkQueryStrings = new List<string>();
+				for (var i = 0U; i < chunkCount; ++i)
+				{
+					var startIndex = i * standardChunkSize;
+					var subStringLength = Math.Min(
+						fullPayloadSize - startIndex,
+						i == chunkCount - 1
+							? bigChunkSize
+							: standardChunkSize);
+					var chunkPayload = json.Substring((int)startIndex, (int)subStringLength);
+
+					var chunk = new ChunkData
+					{
+						Payload = chunkPayload,
+						PayloadId = payloadId,
+						SequenceId = i,
+						TotalChunks = (uint)chunkCount,
+					};
+
+					var chunkParameters = new TopicParameters(chunk)
+					{
+						AccessIdentifier = ReattachInformation.AccessIdentifier,
+					};
+
+					var chunkCommandString = GenerateQueryString(chunkParameters, out _);
+					if (Encoding.UTF8.GetByteCount(chunkCommandString) > DMApiConstants.MaximumTopicRequestLength)
+					{
+						// too long when encoded, need more chunks
+						chunkQueryStrings = null;
+						break;
+					}
+
+					chunkQueryStrings.Add(chunkCommandString);
+				}
+			}
+
+			Logger.LogTrace("Chunking topic request ({totalChunks} total)...", chunkQueryStrings.Count);
+
+			CombinedTopicResponse? combinedResponse = null;
+			bool LogRequestIssue(bool possiblyFromCompletedRequest)
+			{
+				if (combinedResponse?.InteropResponse == null || combinedResponse.InteropResponse.ErrorMessage != null)
+				{
+					Logger.LogWarning(
+						"Topic request {chunkingStatus} failed!{potentialRequestError}",
+						possiblyFromCompletedRequest ? "final chunk" : "chunking",
+						combinedResponse?.InteropResponse?.ErrorMessage != null
+							? $" Request error: {combinedResponse.InteropResponse.ErrorMessage}"
+							: String.Empty);
+					return true;
+				}
+
+				return false;
+			}
+
+			foreach (var chunkCommandString in chunkQueryStrings)
+			{
+				combinedResponse = await SendRawTopic(chunkCommandString, topicPriority, cancellationToken);
+				if (LogRequestIssue(chunkCommandString == chunkQueryStrings.Last()))
+					return null;
+			}
+
+			while ((combinedResponse?.InteropResponse?.MissingChunks?.Count ?? 0) > 0)
+			{
+				Logger.LogWarning("DD is still missing some chunks of topic request P{payloadId}! Sending missing chunks...", payloadId);
+				var missingChunks = combinedResponse!.InteropResponse!.MissingChunks!;
+				var lastIndex = missingChunks.Last();
+				foreach (var missingChunkIndex in missingChunks)
+				{
+					var chunkCommandString = chunkQueryStrings[(int)missingChunkIndex];
+					combinedResponse = await SendRawTopic(chunkCommandString, topicPriority, cancellationToken);
+					if (LogRequestIssue(missingChunkIndex == lastIndex))
+						return null;
+				}
+			}
+
+			return combinedResponse;
+		}
+
+		/// <summary>
+		/// Generates a <see cref="Byond.TopicSender.ITopicClient"/> query string for a given set of <paramref name="parameters"/>.
+		/// </summary>
+		/// <param name="parameters">The <see cref="TopicParameters"/> to serialize.</param>
+		/// <param name="json">The intermediate JSON <see cref="string"/> prior to URL encoding.</param>
+		/// <returns>The <see cref="Byond.TopicSender.ITopicClient"/> query string for the given <paramref name="parameters"/>.</returns>
+		string GenerateQueryString(TopicParameters parameters, out string json)
+		{
+			json = JsonConvert.SerializeObject(parameters, DMApiConstants.SerializerSettings);
+			var commandString = String.Format(
+				CultureInfo.InvariantCulture,
+				"?{0}={1}",
+				byondTopicSender.SanitizeString(DMApiConstants.TopicData),
+				byondTopicSender.SanitizeString(json));
+			return commandString;
+		}
+
+		/// <summary>
+		/// Send a given <paramref name="queryString"/> to DreamDaemon's /world/Topic.
+		/// </summary>
+		/// <param name="queryString">The sanitized topic query string to send.</param>
+		/// <param name="priority">If this is a priority message. If so, the topic will make 5 attempts to send unless BYOND reboots or exits.</param>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the <see cref="CombinedTopicResponse"/> of the topic request.</returns>
+		async ValueTask<CombinedTopicResponse?> SendRawTopic(string queryString, bool priority, CancellationToken cancellationToken)
+		{
+			if (disposed)
+			{
+				Logger.LogWarning(
+					"Attempted to send a topic on a disposed SessionController");
+				return null;
+			}
+
+			var targetPort = ReattachInformation.TopicPort ?? ReattachInformation.Port;
+			Byond.TopicSender.TopicResponse? byondResponse;
+			using (await TopicSendSemaphore.Lock(cancellationToken))
+				byondResponse = await byondTopicSender.SendWithOptionalPriority(
+					asyncDelayer,
+					LogTopicRequests
+						? Logger
+						: NullLogger.Instance,
+					queryString,
+					targetPort,
+					priority,
+					cancellationToken);
+
+			if (byondResponse == null)
+			{
+				if (priority)
+					Logger.LogError(
+						"Unable to send priority topic \"{queryString}\"!",
+						queryString);
+
+				return null;
+			}
+
+			var topicReturn = byondResponse.StringData;
+
+			TopicResponse? interopResponse = null;
+			if (topicReturn != null)
+				try
+				{
+					interopResponse = JsonConvert.DeserializeObject<TopicResponse>(topicReturn, DMApiConstants.SerializerSettings);
+				}
+				catch (Exception ex)
+				{
+					Logger.LogWarning(ex, "Invalid interop response: {topicReturnString}", topicReturn);
+				}
+
+			return new CombinedTopicResponse(byondResponse, interopResponse);
+		}
+
+		/// <summary>
+		/// Sends a command to DreamDaemon through /world/Topic().
+		/// </summary>
+		/// <param name="parameters">The <see cref="TopicParameters"/> to send.</param>
+		/// <param name="bypassLaunchResult">If waiting for the <see cref="LaunchResult"/> should be bypassed.</param>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the <see cref="TopicResponse"/> of /world/Topic().</returns>
+		async ValueTask<TopicResponse?> SendCommand(TopicParameters parameters, bool bypassLaunchResult, CancellationToken cancellationToken)
+		{
+			ArgumentNullException.ThrowIfNull(parameters);
+
+			if (Lifetime.IsCompleted || disposed)
+			{
+				Logger.LogWarning(
+					"Attempted to send a command to an inactive SessionController: {commandType}",
+					parameters.CommandType);
+				return null;
+			}
+
+			if (!DMApiAvailable)
+			{
+				Logger.LogTrace("Not sending topic request {commandType} to server without/with incompatible DMAPI!", parameters.CommandType);
+				return null;
+			}
+
+			var reboot = OnReboot;
+			if (!bypassLaunchResult)
+			{
+				var launchResult = await LaunchResult.WaitAsync(cancellationToken);
+				if (launchResult.ExitCode.HasValue)
+				{
+					Logger.LogDebug("Not sending topic request {commandType} to server that failed to launch!", parameters.CommandType);
+					return null;
+				}
+			}
+
+			// meh, this is kind of a hack, but it works
+			if (!chatTrackingContext.Active)
+			{
+				Logger.LogDebug("Not sending topic request {commandType} to server that is rebooting/starting.", parameters.CommandType);
+				return null;
+			}
+
+			using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+			var combinedCancellationToken = cts.Token;
+			async ValueTask CancelIfLifetimeElapses()
+			{
+				try
+				{
+					var completed = await Task.WhenAny(Lifetime, reboot).WaitAsync(combinedCancellationToken);
+
+					Logger.LogDebug(
+						"Server {action}, cancelling pending command: {commandType}",
+						completed != reboot
+							? "process ended"
+							: "rebooting",
+						parameters.CommandType);
+					cts.Cancel();
+				}
+				catch (OperationCanceledException)
+				{
+					// expected, not even worth tracing
+				}
+				catch (Exception ex)
+				{
+					Logger.LogError(ex, "Error in CancelIfLifetimeElapses!");
+				}
+			}
+
+			TopicResponse? fullResponse = null;
+			var lifetimeWatchingTask = CancelIfLifetimeElapses();
+			try
+			{
+				var combinedResponse = await SendTopicRequest(parameters, combinedCancellationToken);
+
+				void LogCombinedResponse()
+				{
+					if (LogTopicRequests && combinedResponse != null)
+						Logger.LogTrace("Topic response: {topicString}", combinedResponse.ByondTopicResponse.StringData ?? "(NO STRING DATA)");
+				}
+
+				LogCombinedResponse();
+
+				if (combinedResponse?.InteropResponse?.Chunk != null)
+				{
+					Logger.LogTrace("Topic response is chunked...");
+
+					ChunkData? nextChunk = combinedResponse.InteropResponse.Chunk;
+					do
+					{
+						var nextRequest = await ProcessChunk<TopicResponse, ChunkedTopicParameters>(
+							(completedResponse, _) =>
+							{
+								fullResponse = completedResponse;
+								return ValueTask.FromResult<ChunkedTopicParameters?>(null);
+							},
+							error =>
+							{
+								Logger.LogWarning("Topic response chunking error: {message}", error);
+								return null;
+							},
+							combinedResponse?.InteropResponse?.Chunk,
+							combinedCancellationToken);
+
+						if (nextRequest != null)
+						{
+							nextRequest.PayloadId = nextChunk.PayloadId;
+							combinedResponse = await SendTopicRequest(nextRequest, combinedCancellationToken);
+							LogCombinedResponse();
+							nextChunk = combinedResponse?.InteropResponse?.Chunk;
+						}
+						else
+							nextChunk = null;
+					}
+					while (nextChunk != null);
+				}
+				else
+					fullResponse = combinedResponse?.InteropResponse;
+			}
+			catch (OperationCanceledException ex)
+			{
+				Logger.LogDebug(
+					ex,
+					"Topic request {cancellationType}!",
+					combinedCancellationToken.IsCancellationRequested
+						? cancellationToken.IsCancellationRequested
+							? "cancelled"
+							: "aborted"
+						: "timed out");
+
+				// throw only if the original token was the trigger
+				cancellationToken.ThrowIfCancellationRequested();
+			}
+			finally
+			{
+				cts.Cancel();
+				await lifetimeWatchingTask;
+			}
+
+			if (fullResponse?.ErrorMessage != null)
+				Logger.LogWarning(
+					"Errored topic response for command {commandType}: {errorMessage}",
+					parameters.CommandType,
+					fullResponse.ErrorMessage);
+
+			return fullResponse;
+		}
+
+		/// <summary>
+		/// Trigger a custom event from a given <paramref name="invocation"/>.
+		/// </summary>
+		/// <param name="invocation">The <see cref="CustomEventInvocation"/>.</param>
+		/// <returns>An appropriate <see cref="BridgeResponse"/>.</returns>
+		BridgeResponse TriggerCustomEvent(CustomEventInvocation? invocation)
+		{
+			if (invocation == null)
+				return BridgeError("Missing eventInvocation!");
+
+			var eventName = invocation.EventName;
+			if (eventName == null)
+				return BridgeError("Missing eventName!");
+
+			var notifyCompletion = invocation.NotifyCompletion;
+			if (!notifyCompletion.HasValue)
+				return BridgeError("Missing notifyCompletion!");
+
+			var eventParams = new List<string>
+			{
+				ReattachInformation.Dmb.Directory,
+			};
+
+			eventParams.AddRange(invocation
+				.Parameters?
+				.Where(param => param != null)
+				.Cast<string>()
+				?? Enumerable.Empty<string>());
+
+			var eventId = Guid.NewGuid();
+			Logger.LogInformation("Triggering custom event \"{eventName}\": {eventId}", eventName, eventId);
+
+			var cancellationToken = sessionDurationCts.Token;
+			ValueTask? eventTask = eventConsumer.HandleCustomEvent(eventName, eventParams, cancellationToken);
+
+			async Task ProcessEvent()
+			{
+				try
+				{
+					Exception? exception;
+					try
+					{
+						await eventTask.Value;
+						exception = null;
+					}
+					catch (Exception ex)
+					{
+						exception = ex;
+					}
+
+					if (notifyCompletion.Value)
+						await SendCommand(
+							new TopicParameters(eventId),
+							cancellationToken);
+					else if (exception == null)
+						Logger.LogTrace("Finished custom event {eventId}, not sending notification.", eventId);
+
+					if (exception != null)
+						throw exception;
+				}
+				catch (OperationCanceledException ex)
+				{
+					Logger.LogDebug(ex, "Custom event invocation {eventId} aborted!", eventId);
+				}
+				catch (Exception ex)
+				{
+					Logger.LogWarning(ex, "Custom event invocation {eventId} errored!", eventId);
+				}
+			}
+
+			if (!eventTask.HasValue)
+				return BridgeError("Event refused to execute due to matching a TGS event!");
+
+			lock (sessionDurationCts)
+			{
+				var previousEventProcessingTask = customEventProcessingTask;
+				var eventProcessingTask = ProcessEvent();
+				customEventProcessingTask = Task.WhenAll(customEventProcessingTask, eventProcessingTask);
+			}
+
+			return new BridgeResponse
+			{
+				EventId = notifyCompletion.Value
+					? eventId.ToString()
+					: null,
+			};
+		}
 	}
 }

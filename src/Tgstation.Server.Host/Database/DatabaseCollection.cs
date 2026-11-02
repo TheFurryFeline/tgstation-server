@@ -1,15 +1,16 @@
-﻿using Microsoft.EntityFrameworkCore;
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
-using System.Threading;
+
+using Microsoft.EntityFrameworkCore;
 
 namespace Tgstation.Server.Host.Database
 {
 	/// <inheritdoc />
-	sealed class DatabaseCollection<TModel> : IDatabaseCollection<TModel> where TModel : class
+	sealed class DatabaseCollection<TModel> : IDatabaseCollection<TModel>
+		where TModel : class
 	{
 		/// <summary>
 		/// The backing <see cref="DbSet{TEntity}"/>.
@@ -17,7 +18,7 @@ namespace Tgstation.Server.Host.Database
 		readonly DbSet<TModel> dbSet;
 
 		/// <summary>
-		/// Initializes a new instance of the <see cref="DatabaseCollection{TModel}"/> <see langword="class"/>.
+		/// Initializes a new instance of the <see cref="DatabaseCollection{TModel}"/> class.
 		/// </summary>
 		/// <param name="dbSet">The value of <see cref="dbSet"/>.</param>
 		public DatabaseCollection(DbSet<TModel> dbSet)
@@ -45,9 +46,6 @@ namespace Tgstation.Server.Host.Database
 
 		/// <inheritdoc />
 		public void Attach(TModel model) => dbSet.Attach(model);
-
-		/// <inheritdoc />
-		public IAsyncEnumerator<TModel> GetAsyncEnumerator(CancellationToken cancellationToken = default) => dbSet.AsAsyncEnumerable().GetAsyncEnumerator(cancellationToken);
 
 		/// <inheritdoc />
 		public IEnumerator<TModel> GetEnumerator() => dbSet.AsQueryable().GetEnumerator();

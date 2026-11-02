@@ -1,0 +1,12 @@
+query ListUserGroups {
+  swarm {
+    userGroups {
+      queryableGroups {
+        totalCount
+        nodes {
+          id
+        }
+      }
+    }
+  }
+}

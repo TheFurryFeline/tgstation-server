@@ -1,39 +1,41 @@
 ﻿using System;
-using Tgstation.Server.Host.Models;
+using System.Threading.Tasks;
+
+using Tgstation.Server.Api.Models;
 
 namespace Tgstation.Server.Host.Components.Deployment
 {
 	/// <summary>
-	/// Temporary <see cref="IDmbProvider"/>
+	/// Temporary <see cref="IDmbProvider"/>.
 	/// </summary>
-	sealed class TemporaryDmbProvider : IDmbProvider
+	sealed class TemporaryDmbProvider : DmbProviderBase
 	{
 		/// <inheritdoc />
-		public string DmbName { get; }
+		public override string Directory { get; }
 
 		/// <inheritdoc />
-		public string Directory { get; }
+		public override Models.CompileJob CompileJob { get; }
 
 		/// <inheritdoc />
-		public CompileJob CompileJob { get; }
+		public override EngineVersion EngineVersion { get; }
 
 		/// <summary>
-		/// Construct a <see cref="TemporaryDmbProvider"/>
+		/// Initializes a new instance of the <see cref="TemporaryDmbProvider"/> class.
 		/// </summary>
-		/// <param name="directory">The value of <see cref="Directory"/></param>
-		/// <param name="dmb">The value of <see cref="DmbName"/></param>
-		/// <param name="compileJob">The value of <see cref="CompileJob"/></param>
-		public TemporaryDmbProvider(string directory, string dmb, CompileJob compileJob)
+		/// <param name="directory">The value of <see cref="Directory"/>.</param>
+		/// <param name="compileJob">The value of <see cref="CompileJob"/>.</param>
+		/// <param name="engineVersion">The value of <see cref="EngineVersion"/>.</param>
+		public TemporaryDmbProvider(string directory, Models.CompileJob compileJob, EngineVersion engineVersion)
 		{
-			DmbName = dmb ?? throw new ArgumentNullException(nameof(dmb));
 			Directory = directory ?? throw new ArgumentNullException(nameof(directory));
 			CompileJob = compileJob ?? throw new ArgumentNullException(nameof(compileJob));
+			EngineVersion = engineVersion ?? throw new ArgumentNullException(nameof(engineVersion));
 		}
 
 		/// <inheritdoc />
-		public void Dispose() { }
+		public override ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
 		/// <inheritdoc />
-		public void KeepAlive() => throw new NotSupportedException();
+		public override void KeepAlive() => throw new NotSupportedException();
 	}
 }

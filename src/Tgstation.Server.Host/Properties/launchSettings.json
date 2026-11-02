@@ -7,9 +7,14 @@
         "ASPNETCORE_ENVIRONMENT": "Development"
       }
     },
-    "Docker": {
-      "commandName": "Docker",
-      "publishAllPorts": true
+    "WSL": {
+      "commandName": "WSL2",
+      "distributionName": "Ubuntu",
+      "environmentVariables": {
+        "DOTNET_ENVIRONMENT": "Development",
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "General__ValidInstancePaths__0": "/home/dominion/tgs_debug_pen"
+      }
     }
   }
 }

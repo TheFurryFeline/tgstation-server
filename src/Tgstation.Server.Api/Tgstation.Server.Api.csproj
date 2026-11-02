@@ -1,52 +1,43 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
-  <Import Project="../../build/Version.props" />
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="../../build/NugetCommon.props" />
+  <Import Project="../../build/NewtonsoftJson.props" />
 
   <PropertyGroup>
-    <TargetFramework>netstandard2.1</TargetFramework>
-    <DebugType>Full</DebugType>
-    <Version>$(TgsApiVersion)</Version>
-    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-    <Authors>Cyberboss</Authors>
-    <Company>/tg/station 13</Company>
-    <Description>API definitions for tgstation-server</Description>
-    <PackageProjectUrl>https://tgstation.github.io/tgstation-server</PackageProjectUrl>
-    <PackageLicenseFile>LICENSE</PackageLicenseFile>
-    <PackageIcon>tgs.png</PackageIcon>
-    <RepositoryType>Git</RepositoryType>
-    <RepositoryUrl>https://github.com/tgstation/tgstation-server</RepositoryUrl>
-    <Copyright>2018</Copyright>
-    <PackageTags>json web api tgstation-server tgstation ss13 byond</PackageTags>
-    <PackageReleaseNotes>See https://github.com/tgstation/tgstation-server/releases/tag/api-v$(TgsApiVersion)</PackageReleaseNotes>
-    <IncludeSymbols>true</IncludeSymbols>
-    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
-    <CodeAnalysisRuleSet>../../build/analyzers.ruleset</CodeAnalysisRuleSet>
-    <LangVersion>latest</LangVersion>
-    <Nullable>enable</Nullable>
-    <DocumentationFile>bin\$(Configuration)\netstandard2.1\Tgstation.Server.Api.xml</DocumentationFile>
+    <TargetFramework>$(TgsNugetNetFramework)</TargetFramework>
+    <Version>$(TgsApiLibraryVersion)</Version>
+    <Description>API definitions for tgstation-server.</Description>
+    <PackageTags>json web api tgstation-server tgstation ss13 byond http</PackageTags>
+    <PackageReleaseNotes>$(TGS_NUGET_RELEASE_NOTES_API)</PackageReleaseNotes>
     <NoWarn>CA1028</NoWarn>
   </PropertyGroup>
 
-  <PropertyGroup Condition="'$(Configuration)'=='Release'">
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <WarningsAsErrors />
-  </PropertyGroup>
+  <Target Name="ApplyApiVersionAttribute" BeforeTargets="CoreCompile">
+    <ItemGroup>
+      <AssemblyAttributes Include="Tgstation.Server.Api.Properties.ApiVersionAttribute">
+        <_Parameter1>$(TgsRestVersion)</_Parameter1>
+      </AssemblyAttributes>
+    </ItemGroup>
+
+    <WriteCodeFragment AssemblyAttributes="@(AssemblyAttributes)" Language="C#" OutputDirectory="$(IntermediateOutputPath)" OutputFile="ApiVersionAssemblyInfo.cs">
+      <Output TaskParameter="OutputFile" ItemName="Compile" />
+      <Output TaskParameter="OutputFile" ItemName="FileWrites" />
+    </WriteCodeFragment>
+  </Target>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.Http.Extensions" Version="2.2.0" />
-    <PackageReference Include="Microsoft.CodeAnalysis.FxCopAnalyzers" Version="3.0.0">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-    </PackageReference>
-    <PackageReference Include="StyleCop.Analyzers" Version="1.1.118">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
-    </PackageReference>
-    <PackageReference Include="System.ComponentModel.Annotations" Version="4.7.0" />
+    <!-- Usage: HTTP constants reference -->
+    <PackageReference Include="Microsoft.AspNetCore.Http.Extensions" />
+    <!-- Usage: Decoding the 'nbf' property of JWTs -->
+    <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" />
+    <!-- Usage: Data model annotating -->
+    <PackageReference Include="System.ComponentModel.Annotations" />
   </ItemGroup>
-  
+
   <ItemGroup>
     <AdditionalFiles Include="../../build/stylecop.json" />
-    <None Include="../../LICENSE" Pack="true" PackagePath="" />
-    <None Include="../../build/tgs.png" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Tgstation.Server.Common\Tgstation.Server.Common.csproj" />
   </ItemGroup>
 </Project>

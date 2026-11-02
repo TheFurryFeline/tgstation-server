@@ -1,6 +1,7 @@
-﻿using Microsoft.Extensions.DependencyInjection;
-using System;
+﻿using System;
 using System.Threading.Tasks;
+
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Tgstation.Server.Host.Database
 {
@@ -8,14 +9,14 @@ namespace Tgstation.Server.Host.Database
 	sealed class DatabaseContextFactory : IDatabaseContextFactory
 	{
 		/// <summary>
-		/// The <see cref="IServiceScopeFactory"/> for the <see cref="DatabaseContextFactory"/>
+		/// The <see cref="IServiceScopeFactory"/> for the <see cref="DatabaseContextFactory"/>.
 		/// </summary>
 		readonly IServiceScopeFactory scopeFactory;
 
 		/// <summary>
-		/// Construct a <see cref="DatabaseContextFactory"/>
+		/// Initializes a new instance of the <see cref="DatabaseContextFactory"/> class.
 		/// </summary>
-		/// <param name="scopeFactory">The value of <see cref="scopeFactory"/>. Created scopes must be able to provide instances of <see cref="IDatabaseContext"/></param>
+		/// <param name="scopeFactory">The value of <see cref="scopeFactory"/>. Created scopes must be able to provide instances of <see cref="IDatabaseContext"/>.</param>
 		public DatabaseContextFactory(IServiceScopeFactory scopeFactory)
 		{
 			this.scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
@@ -25,13 +26,21 @@ namespace Tgstation.Server.Host.Database
 		}
 
 		/// <inheritdoc />
-		public async Task UseContext(Func<IDatabaseContext, Task> operation)
+		public async ValueTask UseContext(Func<IDatabaseContext, ValueTask> operation)
 		{
-			if (operation == null)
-				throw new ArgumentNullException(nameof(operation));
+			ArgumentNullException.ThrowIfNull(operation);
 
-			using var scope = scopeFactory.CreateScope();
-			await operation(scope.ServiceProvider.GetRequiredService<IDatabaseContext>()).ConfigureAwait(false);
+			await using var scope = scopeFactory.CreateAsyncScope();
+			await operation(scope.ServiceProvider.GetRequiredService<IDatabaseContext>());
+		}
+
+		/// <inheritdoc />
+		public async ValueTask UseContextTaskReturn(Func<IDatabaseContext, Task> operation)
+		{
+			ArgumentNullException.ThrowIfNull(operation);
+
+			await using var scope = scopeFactory.CreateAsyncScope();
+			await operation(scope.ServiceProvider.GetRequiredService<IDatabaseContext>());
 		}
 	}
 }

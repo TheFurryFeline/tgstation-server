@@ -1,11 +1,13 @@
 ﻿using System.Collections.Generic;
 
+using Tgstation.Server.Api.Models.Response;
+
 namespace Tgstation.Server.Host.Models
 {
 	/// <summary>
-	/// Represents an <see cref="Api.Models.Instance"/> in the database
+	/// Represents an <see cref="Api.Models.Instance"/> in the database.
 	/// </summary>
-	public sealed class Instance : Api.Models.Instance
+	public sealed class Instance : Api.Models.Instance, ILegacyApiTransformable<InstanceResponse>
 	{
 		/// <summary>
 		/// Default for <see cref="Api.Models.Instance.ChatBotLimit"/>.
@@ -13,53 +15,69 @@ namespace Tgstation.Server.Host.Models
 		public const ushort DefaultChatBotLimit = 10;
 
 		/// <summary>
-		/// The <see cref="Models.DreamMakerSettings"/> for the <see cref="Instance"/>
+		/// The <see cref="Models.DreamMakerSettings"/> for the <see cref="Instance"/>.
 		/// </summary>
-		public DreamMakerSettings DreamMakerSettings { get; set; }
+		public DreamMakerSettings? DreamMakerSettings { get; set; }
 
 		/// <summary>
-		/// The <see cref="Models.DreamDaemonSettings"/> for the <see cref="Instance"/>
+		/// The <see cref="Models.DreamDaemonSettings"/> for the <see cref="Instance"/>.
 		/// </summary>
-		public DreamDaemonSettings DreamDaemonSettings { get; set; }
+		public DreamDaemonSettings? DreamDaemonSettings { get; set; }
 
 		/// <summary>
-		/// The <see cref="Models.RepositorySettings"/> for the <see cref="Instance"/>
+		/// The <see cref="Models.RepositorySettings"/> for the <see cref="Instance"/>.
 		/// </summary>
-		public RepositorySettings RepositorySettings { get; set; }
+		public RepositorySettings? RepositorySettings { get; set; }
 
 		/// <summary>
-		/// The <see cref="InstanceUser"/>s in the <see cref="Instance"/>
+		/// The <see cref="Api.Models.Internal.SwarmServer.Identifier"/> of the the server in the swarm this instance belongs to.
 		/// </summary>
-		public ICollection<InstanceUser> InstanceUsers { get; set; }
+		public string? SwarmIdentifer { get; set; }
 
 		/// <summary>
-		/// The <see cref="ChatBot"/>s for the <see cref="Instance"/>
+		/// The <see cref="InstancePermissionSet"/>s in the <see cref="Instance"/>.
+		/// </summary>
+		public ICollection<InstancePermissionSet> InstancePermissionSets { get; set; }
+
+		/// <summary>
+		/// The <see cref="ChatBot"/>s for the <see cref="Instance"/>.
 		/// </summary>
 		public ICollection<ChatBot> ChatSettings { get; set; }
 
 		/// <summary>
-		/// The <see cref="RevisionInformation"/>s in the <see cref="Instance"/>
+		/// The <see cref="RevisionInformation"/>s in the <see cref="Instance"/>.
 		/// </summary>
 		public ICollection<RevisionInformation> RevisionInformations { get; set; }
 
 		/// <summary>
-		/// The <see cref="Job"/>s in the <see cref="Instance"/>
+		/// The <see cref="Job"/>s in the <see cref="Instance"/>.
 		/// </summary>
 		public ICollection<Job> Jobs { get; set; }
 
 		/// <summary>
-		/// Convert the <see cref="Instance"/> to it's API form
+		/// Initializes a new instance of the <see cref="Instance"/> class.
 		/// </summary>
-		/// <returns>A new <see cref="Api.Models.Instance"/></returns>
-		public Api.Models.Instance ToApi() => new Api.Models.Instance
+		public Instance()
+		{
+			InstancePermissionSets = new List<InstancePermissionSet>();
+			ChatSettings = new List<ChatBot>();
+			RevisionInformations = new List<RevisionInformation>();
+			Jobs = new List<Job>();
+		}
+
+		/// <inheritdoc />
+		public InstanceResponse ToApi() => new()
 		{
 			AutoUpdateInterval = AutoUpdateInterval,
+			AutoUpdateCron = AutoUpdateCron,
 			ConfigurationType = ConfigurationType,
 			Id = Id,
 			Name = Name,
 			Path = Path,
 			Online = Online,
-			ChatBotLimit = ChatBotLimit
+			ChatBotLimit = ChatBotLimit,
+			AutoStartCron = AutoStartCron,
+			AutoStopCron = AutoStopCron,
 		};
 	}
 }

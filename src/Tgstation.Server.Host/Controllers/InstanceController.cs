@@ -1,35 +1,46 @@
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
-using System;
+﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
+using NCrontab;
+
 using Tgstation.Server.Api;
 using Tgstation.Server.Api.Models;
+using Tgstation.Server.Api.Models.Request;
+using Tgstation.Server.Api.Models.Response;
 using Tgstation.Server.Api.Rights;
+using Tgstation.Server.Common.Extensions;
 using Tgstation.Server.Host.Components;
 using Tgstation.Server.Host.Configuration;
+using Tgstation.Server.Host.Controllers.Results;
 using Tgstation.Server.Host.Database;
+using Tgstation.Server.Host.Extensions;
 using Tgstation.Server.Host.IO;
 using Tgstation.Server.Host.Jobs;
 using Tgstation.Server.Host.Models;
 using Tgstation.Server.Host.Security;
 using Tgstation.Server.Host.System;
+using Tgstation.Server.Host.Utils;
 
 namespace Tgstation.Server.Host.Controllers
 {
 	/// <summary>
-	/// <see cref="ApiController"/> for managing <see cref="Components.Instance"/>s
+	/// <see cref="ApiController"/> for managing <see cref="Components.Instance"/>s.
 	/// </summary>
 	[Route(Routes.InstanceManager)]
-	#pragma warning disable CA1506 // TODO: Decomplexify
-	public sealed class InstanceController : ApiController
+#pragma warning disable CA1506 // TODO: Decomplexify
+	public sealed class InstanceController : ComponentInterfacingController
 	{
 		/// <summary>
 		/// File name to allow attaching instances.
@@ -37,257 +48,184 @@ namespace Tgstation.Server.Host.Controllers
 		public const string InstanceAttachFileName = "TGS4_ALLOW_INSTANCE_ATTACH";
 
 		/// <summary>
-		/// Prefix for move <see cref="Api.Models.Job"/>s.
-		/// </summary>
-		const string MoveInstanceJobPrefix = "Move instance ID ";
-
-		/// <summary>
-		/// The <see cref="IJobManager"/> for the <see cref="InstanceController"/>
+		/// The <see cref="IJobManager"/> for the <see cref="InstanceController"/>.
 		/// </summary>
 		readonly IJobManager jobManager;
 
 		/// <summary>
-		/// The <see cref="IInstanceManager"/> for the <see cref="InstanceController"/>
-		/// </summary>
-		readonly IInstanceManager instanceManager;
-
-		/// <summary>
-		/// The <see cref="IIOManager"/> for the <see cref="InstanceController"/>
+		/// The <see cref="IIOManager"/> for the <see cref="InstanceController"/>.
 		/// </summary>
 		readonly IIOManager ioManager;
 
 		/// <summary>
-		/// The <see cref="IPlatformIdentifier"/> for the <see cref="InstanceController"/>
+		/// The <see cref="IPlatformIdentifier"/> for the <see cref="InstanceController"/>.
 		/// </summary>
 		readonly IPlatformIdentifier platformIdentifier;
 
 		/// <summary>
-		/// The <see cref="GeneralConfiguration"/> for the <see cref="InstanceController"/>.
+		/// The <see cref="IPortAllocator"/> for the <see cref="InstanceController"/>.
 		/// </summary>
-		readonly GeneralConfiguration generalConfiguration;
+		readonly IPortAllocator portAllocator;
 
 		/// <summary>
-		/// Construct a <see cref="InstanceController"/>
+		/// The <see cref="IOptions{TOptions}"/> of <see cref="SwarmConfiguration"/> for the <see cref="InstanceController"/>.
 		/// </summary>
-		/// <param name="databaseContext">The <see cref="IDatabaseContext"/> for the <see cref="ApiController"/></param>
-		/// <param name="authenticationContextFactory">The <see cref="IAuthenticationContextFactory"/> for the <see cref="ApiController"/></param>
-		/// <param name="jobManager">The value of <see cref="jobManager"/></param>
-		/// <param name="instanceManager">The value of <see cref="instanceManager"/></param>
-		/// <param name="ioManager">The value of <see cref="ioManager"/></param>
-		/// <param name="platformIdentifier">The value of <see cref="platformIdentifier"/></param>
-		/// <param name="generalConfigurationOptions">The <see cref="IOptions{TOptions}"/> containing the value of <see cref="generalConfiguration"/>.</param>
-		/// <param name="logger">The <see cref="ILogger"/> for the <see cref="ApiController"/></param>
+		readonly IOptions<SwarmConfiguration> swarmConfigurationOptions;
+
+		/// <summary>
+		/// The <see cref="IOptionsSnapshot{TOptions}"/> of <see cref="GeneralConfiguration"/> for the <see cref="InstanceController"/>.
+		/// </summary>
+		readonly IOptionsSnapshot<GeneralConfiguration> generalConfigurationOptions;
+
+		/// <summary>
+		/// The <see cref="IPermissionsUpdateNotifyee"/> for the <see cref="InstanceController"/>.
+		/// </summary>
+		readonly IPermissionsUpdateNotifyee permissionsUpdateNotifyee;
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="InstanceController"/> class.
+		/// </summary>
+		/// <param name="databaseContext">The <see cref="IDatabaseContext"/> for the <see cref="ComponentInterfacingController"/>.</param>
+		/// <param name="authenticationContext">The <see cref="IAuthenticationContext"/> for the <see cref="ComponentInterfacingController"/>.</param>
+		/// <param name="logger">The <see cref="ILogger"/> for the <see cref="ComponentInterfacingController"/>.</param>
+		/// <param name="instanceManager">The <see cref="IInstanceManager"/> for the <see cref="ComponentInterfacingController"/>.</param>
+		/// <param name="jobManager">The value of <see cref="jobManager"/>.</param>
+		/// <param name="ioManager">The value of <see cref="ioManager"/>.</param>
+		/// <param name="platformIdentifier">The value of <see cref="platformIdentifier"/>.</param>
+		/// <param name="portAllocator">The value of <see cref="portAllocator"/>.</param>
+		/// <param name="permissionsUpdateNotifyee">The value of <see cref="permissionsUpdateNotifyee"/>.</param>
+		/// <param name="swarmConfigurationOptions">The value of <see cref="swarmConfigurationOptions"/>.</param>
+		/// <param name="generalConfigurationOptions">The value of <see cref="generalConfigurationOptions"/>.</param>
+		/// <param name="apiHeaders">The <see cref="IApiHeadersProvider"/> for the <see cref="ComponentInterfacingController"/>.</param>
 		public InstanceController(
 			IDatabaseContext databaseContext,
-			IAuthenticationContextFactory authenticationContextFactory,
-			IJobManager jobManager,
+			IAuthenticationContext authenticationContext,
+			ILogger<InstanceController> logger,
 			IInstanceManager instanceManager,
+			IJobManager jobManager,
 			IIOManager ioManager,
 			IPlatformIdentifier platformIdentifier,
-			IOptions<GeneralConfiguration> generalConfigurationOptions,
-			ILogger<InstanceController> logger)
+			IPortAllocator portAllocator,
+			IPermissionsUpdateNotifyee permissionsUpdateNotifyee,
+			IOptions<SwarmConfiguration> swarmConfigurationOptions,
+			IOptionsSnapshot<GeneralConfiguration> generalConfigurationOptions,
+			IApiHeadersProvider apiHeaders)
 			: base(
 				  databaseContext,
-				  authenticationContextFactory,
+				  authenticationContext,
 				  logger,
+				  instanceManager,
+				  apiHeaders,
 				  false)
 		{
 			this.jobManager = jobManager ?? throw new ArgumentNullException(nameof(jobManager));
-			this.instanceManager = instanceManager ?? throw new ArgumentNullException(nameof(instanceManager));
 			this.ioManager = ioManager ?? throw new ArgumentNullException(nameof(ioManager));
 			this.platformIdentifier = platformIdentifier ?? throw new ArgumentNullException(nameof(platformIdentifier));
-			generalConfiguration = generalConfigurationOptions?.Value ?? throw new ArgumentNullException(nameof(generalConfigurationOptions));
-		}
+			this.portAllocator = portAllocator ?? throw new ArgumentNullException(nameof(portAllocator));
+			this.permissionsUpdateNotifyee = permissionsUpdateNotifyee ?? throw new ArgumentNullException(nameof(permissionsUpdateNotifyee));
 
-		Models.Instance CreateDefaultInstance(Api.Models.Instance initialSettings)
-			=> new Models.Instance
-			{
-				ConfigurationType = initialSettings.ConfigurationType ?? ConfigurationType.Disallowed,
-				DreamDaemonSettings = new DreamDaemonSettings
-				{
-					AllowWebClient = false,
-					AutoStart = false,
-					Port = 1337,
-					SecurityLevel = DreamDaemonSecurity.Safe,
-					StartupTimeout = 60,
-					HeartbeatSeconds = 60,
-					TopicRequestTimeout = generalConfiguration.ByondTopicTimeout
-				},
-				DreamMakerSettings = new DreamMakerSettings
-				{
-					ApiValidationPort = 1339,
-					ApiValidationSecurityLevel = DreamDaemonSecurity.Safe,
-					RequireDMApiValidation = true
-				},
-				Name = initialSettings.Name,
-				Online = false,
-				Path = initialSettings.Path,
-				AutoUpdateInterval = initialSettings.AutoUpdateInterval ?? 0,
-				ChatBotLimit = initialSettings.ChatBotLimit ?? Models.Instance.DefaultChatBotLimit,
-				RepositorySettings = new RepositorySettings
-				{
-					CommitterEmail = Components.Repository.Repository.DefaultCommitterEmail,
-					CommitterName = Components.Repository.Repository.DefaultCommitterName,
-					PushTestMergeCommits = false,
-					ShowTestMergeCommitters = false,
-					AutoUpdatesKeepTestMerges = false,
-					AutoUpdatesSynchronize = false,
-					PostTestMergeComment = false
-				},
-				InstanceUsers = new List<Models.InstanceUser> // give this user full privileges on the instance
-				{
-					InstanceAdminUser(null)
-				}
-			};
-
-		string NormalizePath(string path)
-		{
-			if (path == null)
-				return null;
-
-			path = ioManager.ResolvePath(path);
-			if (platformIdentifier.IsWindows)
-				path = path.ToUpperInvariant().Replace('\\', '/');
-
-			return path;
-		}
-
-		Models.InstanceUser InstanceAdminUser(Models.InstanceUser userToModify)
-		{
-			if (userToModify == null)
-				userToModify = new Models.InstanceUser()
-				{
-					UserId = AuthenticationContext.User.Id.Value
-				};
-			userToModify.ByondRights = RightsHelper.AllRights<ByondRights>();
-			userToModify.ChatBotRights = RightsHelper.AllRights<ChatBotRights>();
-			userToModify.ConfigurationRights = RightsHelper.AllRights<ConfigurationRights>();
-			userToModify.DreamDaemonRights = RightsHelper.AllRights<DreamDaemonRights>();
-			userToModify.DreamMakerRights = RightsHelper.AllRights<DreamMakerRights>();
-			userToModify.RepositoryRights = RightsHelper.AllRights<RepositoryRights>();
-			userToModify.InstanceUserRights = RightsHelper.AllRights<InstanceUserRights>();
-			return userToModify;
+			this.swarmConfigurationOptions = swarmConfigurationOptions ?? throw new ArgumentNullException(nameof(swarmConfigurationOptions));
+			this.generalConfigurationOptions = generalConfigurationOptions ?? throw new ArgumentNullException(nameof(generalConfigurationOptions));
 		}
 
 		/// <summary>
 		/// Create or attach an <see cref="Api.Models.Instance"/>.
 		/// </summary>
-		/// <param name="model">The <see cref="Api.Models.Instance"/> settings.</param>
+		/// <param name="model">The <see cref="InstanceCreateRequest"/>.</param>
 		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
-		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> of the request.</returns>
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the <see cref="IActionResult"/> of the request.</returns>
 		/// <response code="200">Instance attached successfully.</response>
 		/// <response code="201">Instance created successfully.</response>
 		[HttpPut]
 		[TgsAuthorize(InstanceManagerRights.Create)]
-		[ProducesResponseType(typeof(Api.Models.Instance), 200)]
-		[ProducesResponseType(typeof(Api.Models.Instance), 201)]
-		public async Task<IActionResult> Create([FromBody] Api.Models.Instance model, CancellationToken cancellationToken)
+		[ProducesResponseType(typeof(InstanceResponse), 200)]
+		[ProducesResponseType(typeof(InstanceResponse), 201)]
+		public async ValueTask<IActionResult> Create([FromBody] InstanceCreateRequest model, CancellationToken cancellationToken)
 		{
-			if (model == null)
-				throw new ArgumentNullException(nameof(model));
+			ArgumentNullException.ThrowIfNull(model);
 
-			if (String.IsNullOrWhiteSpace(model.Name))
-				return BadRequest(new ErrorMessage(ErrorCode.InstanceWhitespaceName));
+			if (String.IsNullOrWhiteSpace(model.Name) || String.IsNullOrWhiteSpace(model.Path))
+				return BadRequest(new ErrorMessageResponse(ErrorCode.InstanceWhitespaceNameOrPath));
 
-			var unNormalizedPath = model.Path;
-			var targetInstancePath = NormalizePath(unNormalizedPath);
-			model.Path = targetInstancePath;
-
-			var installationDirectoryPath = NormalizePath(DefaultIOManager.CurrentDirectory);
-
-			bool InstanceIsChildOf(string otherPath)
-			{
-				if (!targetInstancePath.StartsWith(otherPath, StringComparison.Ordinal))
-					return false;
-
-				bool sameLength = targetInstancePath.Length == otherPath.Length;
-				char dirSeparatorChar = targetInstancePath.ToCharArray()[Math.Min(otherPath.Length, targetInstancePath.Length - 1)];
-				return sameLength
-					|| dirSeparatorChar == Path.DirectorySeparatorChar
-					|| dirSeparatorChar == Path.AltDirectorySeparatorChar;
-			}
-
-			if (InstanceIsChildOf(installationDirectoryPath))
-				return Conflict(new ErrorMessage(ErrorCode.InstanceAtConflictingPath));
-
-			// Validate it's not a child of any other instance
-			IActionResult earlyOut = null;
-			ulong countOfOtherInstances = 0;
-			using (var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
-			{
-				var newCancellationToken = cts.Token;
-				try
-				{
-					await DatabaseContext
-						.Instances
-						.AsQueryable()
-						.Select(x => new Models.Instance
-						{
-							Path = x.Path
-						})
-						.ForEachAsync(
-							otherInstance =>
-							{
-								if (++countOfOtherInstances >= generalConfiguration.InstanceLimit)
-									earlyOut ??= Conflict(new ErrorMessage(ErrorCode.InstanceLimitReached));
-								else if (InstanceIsChildOf(otherInstance.Path))
-									earlyOut ??= Conflict(new ErrorMessage(ErrorCode.InstanceAtConflictingPath));
-
-								if (earlyOut != null && !newCancellationToken.IsCancellationRequested)
-									cts.Cancel();
-							},
-							newCancellationToken)
-						.ConfigureAwait(false);
-				}
-				catch (OperationCanceledException)
-				{
-					cancellationToken.ThrowIfCancellationRequested();
-				}
-			}
-
+			IActionResult? earlyOut = ValidateCronSetting(model);
 			if (earlyOut != null)
 				return earlyOut;
 
-			// Last test, ensure it's in the list of valid paths
-			if (!(generalConfiguration.ValidInstancePaths?
-				.Select(path => NormalizePath(path))
-				.Any(path => InstanceIsChildOf(path)) ?? true))
-				return BadRequest(new ErrorMessage(ErrorCode.InstanceNotAtWhitelistedPath));
+			var targetInstancePath = NormalizePath(model.Path!);
+			model.Path = targetInstancePath;
 
-			async Task<bool> DirExistsAndIsNotEmpty()
+			var installationDirectoryPath = DefaultIOManager.CurrentDirectory;
+			if (await ioManager.PathIsChildOf(installationDirectoryPath, targetInstancePath, cancellationToken))
+				return Conflict(new ErrorMessageResponse(ErrorCode.InstanceAtConflictingPath));
+
+			// Validate it's not a child of any other instance
+			var instancePaths = await DatabaseContext
+				.Instances
+				.Where(x => x.SwarmIdentifer == swarmConfigurationOptions.Value.Identifier)
+				.Select(x => new Models.Instance
+				{
+					Path = x.Path,
+				})
+				.ToListAsync(cancellationToken);
+
+			var generalConfiguration = generalConfigurationOptions.Value;
+			if ((instancePaths.Count + 1) >= generalConfiguration.InstanceLimit)
+				return Conflict(new ErrorMessageResponse(ErrorCode.InstanceLimitReached));
+
+			var instancePathChecks = instancePaths
+				.Select(otherInstance => ioManager.PathIsChildOf(otherInstance.Path!, targetInstancePath, cancellationToken))
+				.ToArray();
+
+			await Task.WhenAll(instancePathChecks);
+
+			if (instancePathChecks.Any(task => task.Result))
+				return Conflict(new ErrorMessageResponse(ErrorCode.InstanceAtConflictingPath));
+
+			// Last test, ensure it's in the list of valid paths
+			var pathChecks = generalConfiguration.ValidInstancePaths?
+				.Select(path => ioManager.PathIsChildOf(path, targetInstancePath, cancellationToken))
+				.ToArray()
+				?? Enumerable.Empty<Task<bool>>();
+			await Task.WhenAll(pathChecks);
+			if (!pathChecks.All(task => task.Result))
+				return BadRequest(new ErrorMessageResponse(ErrorCode.InstanceNotAtWhitelistedPath));
+
+			async ValueTask<bool> DirExistsAndIsNotEmpty()
 			{
-				if (!await ioManager.DirectoryExists(model.Path, cancellationToken).ConfigureAwait(false))
+				if (!await ioManager.DirectoryExists(targetInstancePath, cancellationToken))
 					return false;
 
-				var filesTask = ioManager.GetFiles(model.Path, cancellationToken);
-				var dirsTask = ioManager.GetDirectories(model.Path, cancellationToken);
+				var filesTask = ioManager.GetFiles(targetInstancePath, cancellationToken);
+				var dirsTask = ioManager.GetDirectories(targetInstancePath, cancellationToken);
 
-				var files = await filesTask.ConfigureAwait(false);
-				var dirs = await dirsTask.ConfigureAwait(false);
+				var files = await filesTask;
+				var dirs = await dirsTask;
 
 				return files.Concat(dirs).Any();
 			}
 
 			var dirExistsTask = DirExistsAndIsNotEmpty();
 			bool attached = false;
-			if (await ioManager.FileExists(model.Path, cancellationToken).ConfigureAwait(false) || await dirExistsTask.ConfigureAwait(false))
-				if (!await ioManager.FileExists(ioManager.ConcatPath(model.Path, InstanceAttachFileName), cancellationToken).ConfigureAwait(false))
-					return Conflict(new ErrorMessage(ErrorCode.InstanceAtExistingPath));
+			if (await ioManager.FileExists(targetInstancePath, cancellationToken) || await dirExistsTask)
+				if (!await ioManager.FileExists(ioManager.ConcatPath(targetInstancePath, InstanceAttachFileName), cancellationToken))
+					return Conflict(new ErrorMessageResponse(ErrorCode.InstanceAtExistingPath));
 				else
 					attached = true;
 
-			var newInstance = CreateDefaultInstance(model);
+			var newInstance = await CreateDefaultInstance(model, cancellationToken);
+			if (newInstance == null)
+				return Conflict(new ErrorMessageResponse(ErrorCode.NoPortsAvailable));
 
 			DatabaseContext.Instances.Add(newInstance);
 			try
 			{
-				await DatabaseContext.Save(cancellationToken).ConfigureAwait(false);
+				await DatabaseContext.Save(cancellationToken);
 
 				try
 				{
 					// actually reserve it now
-					await ioManager.CreateDirectory(unNormalizedPath, cancellationToken).ConfigureAwait(false);
-					await ioManager.DeleteFile(ioManager.ConcatPath(targetInstancePath, InstanceAttachFileName), cancellationToken).ConfigureAwait(false);
+					await ioManager.CreateDirectory(targetInstancePath, cancellationToken);
+					await ioManager.DeleteFile(ioManager.ConcatPath(targetInstancePath, InstanceAttachFileName), cancellationToken);
 				}
 				catch
 				{
@@ -295,22 +233,33 @@ namespace Tgstation.Server.Host.Controllers
 					DatabaseContext.Instances.Remove(newInstance);
 
 					// DCT: Operation must always run
-					await DatabaseContext.Save(default).ConfigureAwait(false);
+					await DatabaseContext.Save(CancellationToken.None);
 					throw;
 				}
 			}
 			catch (IOException e)
 			{
-				return Conflict(new ErrorMessage(ErrorCode.IOError)
+				return Conflict(new ErrorMessageResponse(ErrorCode.IOError)
 				{
-					AdditionalData = e.Message
+					AdditionalData = e.Message,
 				});
 			}
 
-			Logger.LogInformation("{0} {1} instance {2}: {3} ({4})", AuthenticationContext.User.Name, attached ? "attached" : "created", newInstance.Name, newInstance.Id, newInstance.Path);
+			Logger.LogInformation(
+				"{userName} {attachedOrCreated} instance {instanceName}: {instanceId} ({instancePath})",
+				AuthenticationContext.User.Name,
+				attached ? "attached" : "created",
+				newInstance.Name,
+				newInstance.Id,
+				newInstance.Path);
+
+			await permissionsUpdateNotifyee.InstancePermissionSetCreated(
+				newInstance.InstancePermissionSets.First(),
+				cancellationToken);
 
 			var api = newInstance.ToApi();
-			return attached ? (IActionResult)Json(api) : Created(api);
+			api.Accessible = true; // instances are always accessible by their creator
+			return attached ? Json(api) : this.Created(api);
 		}
 
 		/// <summary>
@@ -318,40 +267,64 @@ namespace Tgstation.Server.Host.Controllers
 		/// </summary>
 		/// <param name="id">The <see cref="EntityId.Id"/> of the instance to detach.</param>
 		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
-		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> of the request.</returns>
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the <see cref="IActionResult"/> of the request.</returns>
 		/// <response code="204">Instance detatched successfully.</response>
 		/// <response code="410">The database entity for the requested instance could not be retrieved. The instance was likely detached.</response>
 		[HttpDelete("{id}")]
 		[TgsAuthorize(InstanceManagerRights.Delete)]
 		[ProducesResponseType(204)]
-		[ProducesResponseType(typeof(ErrorMessage), 410)]
-		public async Task<IActionResult> Delete(long id, CancellationToken cancellationToken)
+		[ProducesResponseType(typeof(ErrorMessageResponse), 410)]
+		public async ValueTask<IActionResult> Delete(long id, CancellationToken cancellationToken)
 		{
 			var originalModel = await DatabaseContext
 				.Instances
-				.AsQueryable()
-				.Where(x => x.Id == id)
-				.FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
+				.Where(x => x.Id == id && x.SwarmIdentifer == swarmConfigurationOptions.Value.Identifier)
+				.FirstOrDefaultAsync(cancellationToken);
 			if (originalModel == default)
-				return Gone();
-			if (originalModel.Online.Value)
-				return Conflict(new ErrorMessage(ErrorCode.InstanceDetachOnline));
+				return this.Gone();
+			if (originalModel.Online!.Value)
+				return Conflict(new ErrorMessageResponse(ErrorCode.InstanceDetachOnline));
 
-			DatabaseContext.Instances.Remove(originalModel);
-
-			var attachFileName = ioManager.ConcatPath(originalModel.Path, InstanceAttachFileName);
+			var originalPath = originalModel.Path!;
+			var attachFileName = ioManager.ConcatPath(originalPath, InstanceAttachFileName);
 			try
 			{
-				await ioManager.WriteAllBytes(attachFileName, Array.Empty<byte>(), cancellationToken).ConfigureAwait(false);
+				if (await ioManager.DirectoryExists(originalPath, cancellationToken))
+					await ioManager.WriteAllBytes(attachFileName, Array.Empty<byte>(), cancellationToken);
 			}
 			catch (OperationCanceledException)
 			{
 				// DCT: Operation must always run
-				await ioManager.DeleteFile(attachFileName, default).ConfigureAwait(false);
+				await ioManager.DeleteFile(attachFileName, CancellationToken.None);
 				throw;
 			}
 
-			await DatabaseContext.Save(cancellationToken).ConfigureAwait(false); // cascades everything
+			try
+			{
+				// yes this is racy af. I hate it
+				// there's a bug where removing the root instance doesn't work sometimes
+				await DatabaseContext
+					.CompileJobs
+					.Where(x => x.Job!.Instance!.Id == id)
+					.ExecuteDeleteAsync(cancellationToken);
+				await DatabaseContext
+					.RevInfoTestMerges
+					.Where(x => x.RevisionInformation.InstanceId == id)
+					.ExecuteDeleteAsync(cancellationToken);
+				await DatabaseContext
+					.RevisionInformations
+					.Where(x => x.InstanceId == id)
+					.ExecuteDeleteAsync(cancellationToken);
+
+				DatabaseContext.Instances.Remove(originalModel);
+				await DatabaseContext.Save(cancellationToken); // cascades everything else
+			}
+			catch
+			{
+				await ioManager.DeleteFile(attachFileName, CancellationToken.None); // DCT: Shouldn't be cancelled
+				throw;
+			}
+
 			return NoContent();
 		}
 
@@ -360,55 +333,57 @@ namespace Tgstation.Server.Host.Controllers
 		/// </summary>
 		/// <param name="model">The updated <see cref="Api.Models.Instance"/> settings.</param>
 		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
-		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> of the request.</returns>
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the <see cref="IActionResult"/> of the request.</returns>
 		/// <response code="200">Instance updated successfully.</response>
 		/// <response code="202">Instance updated successfully and relocation job created.</response>
 		/// <response code="410">The database entity for the requested instance could not be retrieved. The instance was likely detached.</response>
 		[HttpPost]
-		[TgsAuthorize(InstanceManagerRights.Relocate | InstanceManagerRights.Rename | InstanceManagerRights.SetAutoUpdate | InstanceManagerRights.SetConfiguration | InstanceManagerRights.SetOnline | InstanceManagerRights.SetChatBotLimit)]
-		[ProducesResponseType(typeof(Api.Models.Instance), 200)]
-		[ProducesResponseType(typeof(Api.Models.Instance), 202)]
-		[ProducesResponseType(typeof(ErrorMessage), 410)]
+		[TgsAuthorize(
+			InstanceManagerRights.Relocate
+			| InstanceManagerRights.Rename
+			| InstanceManagerRights.SetAutoUpdate
+			| InstanceManagerRights.SetConfiguration
+			| InstanceManagerRights.SetOnline
+			| InstanceManagerRights.SetChatBotLimit
+			| InstanceManagerRights.SetAutoStart
+			| InstanceManagerRights.SetAutoStop)]
+		[ProducesResponseType(typeof(InstanceResponse), 200)]
+		[ProducesResponseType(typeof(InstanceResponse), 202)]
+		[ProducesResponseType(typeof(ErrorMessageResponse), 410)]
 #pragma warning disable CA1502 // TODO: Decomplexify
-		public async Task<IActionResult> Update([FromBody] Api.Models.Instance model, CancellationToken cancellationToken)
+		public async ValueTask<IActionResult> Update([FromBody] InstanceUpdateRequest model, CancellationToken cancellationToken)
 		{
-			if (model == null)
-				throw new ArgumentNullException(nameof(model));
+			ArgumentNullException.ThrowIfNull(model);
 
 			IQueryable<Models.Instance> InstanceQuery() => DatabaseContext
 				.Instances
-				.AsQueryable()
-				.Where(x => x.Id == model.Id);
+				.Where(x => x.Id == model.Id && x.SwarmIdentifer == swarmConfigurationOptions.Value.Identifier);
 
 			var moveJob = await InstanceQuery()
-				.SelectMany(x => x.Jobs).
-#pragma warning disable CA1307 // Specify StringComparison
-				Where(x => !x.StoppedAt.HasValue && x.Description.StartsWith(MoveInstanceJobPrefix))
-#pragma warning restore CA1307 // Specify StringComparison
-				.Select(x => new Models.Job
-				{
-					Id = x.Id
-				}).FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
+				.SelectMany(x => x.Jobs)
+				.Where(x => !x.StoppedAt.HasValue && x.JobCode == JobCode.Move)
+				.Select(x => new Job(x.Id!.Value))
+				.FirstOrDefaultAsync(cancellationToken);
 
-			if (moveJob != default)
+			if (moveJob != null)
 			{
 				// don't allow them to cancel it if they can't start it.
-				if (!AuthenticationContext.User.InstanceManagerRights.Value.HasFlag(InstanceManagerRights.Relocate))
+				if (!AuthenticationContext.PermissionSet.InstanceManagerRights!.Value.HasFlag(InstanceManagerRights.Relocate))
 					return Forbid();
-				await jobManager.CancelJob(moveJob, AuthenticationContext.User, true, cancellationToken).ConfigureAwait(false); // cancel it now
+				await jobManager.CancelJob(moveJob, AuthenticationContext.User, true, cancellationToken); // cancel it now
 			}
 
 			var originalModel = await InstanceQuery()
 				.Include(x => x.RepositorySettings)
 				.Include(x => x.ChatSettings)
-				.ThenInclude(x => x.Channels)
+					.ThenInclude(x => x.Channels)
 				.Include(x => x.DreamDaemonSettings) // need these for onlining
-				.FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
+				.FirstOrDefaultAsync(cancellationToken);
 			if (originalModel == default(Models.Instance))
-				return Gone();
+				return this.Gone();
 
-			if (InstanceRequiredController.ValidateInstanceOnlineStatus(instanceManager, Logger, originalModel))
-				await DatabaseContext.Save(cancellationToken).ConfigureAwait(false);
+			if (ValidateInstanceOnlineStatus(originalModel))
+				await DatabaseContext.Save(cancellationToken);
 
 			var userRights = (InstanceManagerRights)AuthenticationContext.GetRight(RightsType.InstanceManager);
 			bool CheckModified<T>(Expression<Func<Api.Models.Instance, T>> expression, InstanceManagerRights requiredRight)
@@ -426,77 +401,102 @@ namespace Tgstation.Server.Host.Controllers
 				return false;
 			}
 
-			string originalModelPath = null;
-			string rawPath = null;
+			string? originalModelPath = null;
+			string? normalizedPath = null;
+			var originalOnline = originalModel.Online!.Value;
 			if (model.Path != null)
 			{
-				rawPath = NormalizePath(model.Path);
+				normalizedPath = NormalizePath(model.Path);
 
-				if (rawPath != originalModel.Path)
+				if (normalizedPath != originalModel.Path)
 				{
 					if (!userRights.HasFlag(InstanceManagerRights.Relocate))
 						return Forbid();
-					if (originalModel.Online.Value && model.Online != true)
-						return Conflict(new ErrorMessage(ErrorCode.InstanceRelocateOnline));
+					if (originalOnline && model.Online != true)
+						return Conflict(new ErrorMessageResponse(ErrorCode.InstanceRelocateOnline));
 
 					var dirExistsTask = ioManager.DirectoryExists(model.Path, cancellationToken);
-					if (await ioManager.FileExists(model.Path, cancellationToken).ConfigureAwait(false) || await dirExistsTask.ConfigureAwait(false))
-						return Conflict(new ErrorMessage(ErrorCode.InstanceAtExistingPath));
+					if (await ioManager.FileExists(model.Path, cancellationToken) || await dirExistsTask)
+						return Conflict(new ErrorMessageResponse(ErrorCode.InstanceAtExistingPath));
 
 					originalModelPath = originalModel.Path;
-					originalModel.Path = rawPath;
+					originalModel.Path = normalizedPath;
 				}
 			}
 
-			var oldAutoUpdateInterval = originalModel.AutoUpdateInterval.Value;
-			var originalOnline = originalModel.Online.Value;
+			var oldAutoUpdateInterval = originalModel.AutoUpdateInterval!.Value;
+			var oldAutoUpdateCron = originalModel.AutoUpdateCron;
+			var oldAutoStartCron = originalModel.AutoStartCron;
+			var oldAutoStopCron = originalModel.AutoStopCron;
+
+			var earlyOut = ValidateCronSetting(model);
+			if (earlyOut != null)
+				return earlyOut;
+
+			var changedAutoUpdateInterval = model.AutoUpdateInterval.HasValue && oldAutoUpdateInterval != model.AutoUpdateInterval;
+			var changedAutoUpdateCron = model.AutoUpdateCron != null && oldAutoUpdateCron != model.AutoUpdateCron;
+
+			var changedAutoStart = model.AutoStartCron != null && oldAutoStartCron != model.AutoStartCron;
+			var changedAutoStop = model.AutoStopCron != null && oldAutoStopCron != model.AutoStopCron;
+
 			var renamed = model.Name != null && originalModel.Name != model.Name;
 
 			if (CheckModified(x => x.AutoUpdateInterval, InstanceManagerRights.SetAutoUpdate)
+				|| CheckModified(x => x.AutoUpdateCron, InstanceManagerRights.SetAutoUpdate)
 				|| CheckModified(x => x.ConfigurationType, InstanceManagerRights.SetConfiguration)
 				|| CheckModified(x => x.Name, InstanceManagerRights.Rename)
 				|| CheckModified(x => x.Online, InstanceManagerRights.SetOnline)
-				|| CheckModified(x => x.ChatBotLimit, InstanceManagerRights.SetChatBotLimit))
+				|| CheckModified(x => x.ChatBotLimit, InstanceManagerRights.SetChatBotLimit)
+				|| CheckModified(x => x.AutoStartCron, InstanceManagerRights.SetAutoStart)
+				|| CheckModified(x => x.AutoStopCron, InstanceManagerRights.SetAutoStop))
 				return Forbid();
 
 			if (model.ChatBotLimit.HasValue)
 			{
 				var countOfExistingChatBots = await DatabaseContext
 					.ChatBots
-					.AsQueryable()
 					.Where(x => x.InstanceId == originalModel.Id)
-					.CountAsync(cancellationToken)
-					.ConfigureAwait(false);
+					.CountAsync(cancellationToken);
 
 				if (countOfExistingChatBots > model.ChatBotLimit.Value)
-					return Conflict(new ErrorMessage(ErrorCode.ChatBotMax));
+					return Conflict(new ErrorMessageResponse(ErrorCode.ChatBotMax));
 			}
 
-			await DatabaseContext.Save(cancellationToken).ConfigureAwait(false);
+			if (changedAutoUpdateCron)
+				model.AutoUpdateInterval = 0;
+			else if (changedAutoUpdateInterval)
+				model.AutoUpdateCron = String.Empty;
+
+			await DatabaseContext.Save(cancellationToken);
 
 			if (renamed)
 			{
-				using var componentInstance = instanceManager.GetInstanceReference(originalModel);
-				if (componentInstance != null)
-					await componentInstance.InstanceRenamed(originalModel.Name, cancellationToken).ConfigureAwait(false);
+				// ignoring retval because we don't care if it's offline
+				await WithComponentInstanceNullable(
+					async componentInstance =>
+					{
+						await componentInstance.InstanceRenamed(originalModel.Name!, cancellationToken);
+						return null;
+					},
+					originalModel);
 			}
 
-			var oldAutoStart = originalModel.DreamDaemonSettings.AutoStart;
+			var oldAutoStart = originalModel.DreamDaemonSettings!.AutoStart;
 			try
 			{
 				if (originalOnline && model.Online == false)
-					await instanceManager.OfflineInstance(originalModel, AuthenticationContext.User, cancellationToken).ConfigureAwait(false);
+					await InstanceOperations.OfflineInstance(originalModel, AuthenticationContext.User, cancellationToken);
 				else if (!originalOnline && model.Online == true)
 				{
 					// force autostart false here because we don't want any long running jobs right now
 					// remember to document this
 					originalModel.DreamDaemonSettings.AutoStart = false;
-					await instanceManager.OnlineInstance(originalModel, cancellationToken).ConfigureAwait(false);
+					await InstanceOperations.OnlineInstance(originalModel, cancellationToken);
 				}
 			}
 			catch (Exception e)
 			{
-				if(!(e is OperationCanceledException))
+				if (e is not OperationCanceledException)
 					Logger.LogError(e, "Error changing instance online state!");
 				originalModel.Online = originalOnline;
 				originalModel.DreamDaemonSettings.AutoStart = oldAutoStart;
@@ -504,71 +504,92 @@ namespace Tgstation.Server.Host.Controllers
 					originalModel.Path = originalModelPath;
 
 				// DCT: Operation must always run
-				await DatabaseContext.Save(default).ConfigureAwait(false);
+				await DatabaseContext.Save(CancellationToken.None);
 				throw;
 			}
 
-			var api = (AuthenticationContext.GetRight(RightsType.InstanceManager) & (ulong)InstanceManagerRights.Read) != 0 ? originalModel.ToApi() : new Api.Models.Instance
+			var api = (AuthenticationContext.GetRight(RightsType.InstanceManager) & (ulong)InstanceManagerRights.Read) != 0 ? originalModel.ToApi() : new InstanceResponse
 			{
-				Id = originalModel.Id
+				Id = originalModel.Id,
 			};
 
 			var moving = originalModelPath != null;
 			if (moving)
 			{
-				var job = new Models.Job
-				{
-					Description = $"{MoveInstanceJobPrefix}{originalModel.Id} from {originalModelPath} to {rawPath}",
-					Instance = originalModel,
-					CancelRightsType = RightsType.InstanceManager,
-					CancelRight = (ulong)InstanceManagerRights.Relocate,
-					StartedBy = AuthenticationContext.User
-				};
+				var description = $"Move instance ID {originalModel.Id} from {originalModelPath} to {normalizedPath}";
+				var job = Job.Create(JobCode.Move, AuthenticationContext.User, originalModel, InstanceManagerRights.Relocate);
+				job.Description = description;
 
 				await jobManager.RegisterOperation(
 					job,
 					(core, databaseContextFactory, paramJob, progressHandler, ct) // core will be null here since the instance is offline
-						=> instanceManager.MoveInstance(originalModel, originalModelPath, ct),
-					cancellationToken)
-					.ConfigureAwait(false);
+						=> InstanceOperations.MoveInstance(originalModel, originalModelPath!, ct),
+					cancellationToken);
 				api.MoveJob = job.ToApi();
 			}
 
-			if (model.AutoUpdateInterval.HasValue && oldAutoUpdateInterval != model.AutoUpdateInterval)
+			var changedAutoUpdate = changedAutoUpdateInterval || changedAutoUpdateCron;
+			if (changedAutoUpdate || changedAutoStart || changedAutoStop)
 			{
-				using var componentInstance = instanceManager.GetInstanceReference(originalModel);
-				if (componentInstance != null)
-					await componentInstance.SetAutoUpdateInterval(model.AutoUpdateInterval.Value).ConfigureAwait(false);
+				// ignoring retval because we don't care if it's offline
+				await WithComponentInstanceNullable(
+					async componentInstance =>
+					{
+						var autoUpdateTask = changedAutoUpdate
+							? componentInstance.ScheduleAutoUpdate(model.AutoUpdateInterval!.Value, model.AutoUpdateCron)
+							: ValueTask.CompletedTask;
+
+						var autoStartTask = changedAutoStart
+							? componentInstance.ScheduleServerStart(model.AutoStartCron)
+							: ValueTask.CompletedTask;
+
+						var autoStopTask = changedAutoStop
+							? componentInstance.ScheduleServerStop(model.AutoStopCron)
+							: ValueTask.CompletedTask;
+
+						await ValueTaskExtensions.WhenAll(autoUpdateTask, autoStartTask, autoStopTask);
+
+						return null;
+					},
+					originalModel);
 			}
 
-			return moving ? (IActionResult)Accepted(api) : Json(api);
+			await CheckAccessible(api, cancellationToken);
+			return moving ? Accepted(api) : Json(api);
 		}
 #pragma warning restore CA1502
 
 		/// <summary>
 		/// List <see cref="Api.Models.Instance"/>s.
 		/// </summary>
+		/// <param name="page">The current page.</param>
+		/// <param name="pageSize">The page size.</param>
 		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
-		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> of the request.</returns>
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the <see cref="IActionResult"/> of the request.</returns>
 		/// <response code="200">Retrieved <see cref="Api.Models.Instance"/>s successfully.</response>
 		[HttpGet(Routes.List)]
 		[TgsAuthorize(InstanceManagerRights.List | InstanceManagerRights.Read)]
-		[ProducesResponseType(typeof(IEnumerable<Api.Models.Instance>), 200)]
-		public async Task<IActionResult> List(CancellationToken cancellationToken)
+		[ProducesResponseType(typeof(PaginatedResponse<InstanceResponse>), 200)]
+		public async ValueTask<IActionResult> List(
+			[FromQuery] int? page,
+			[FromQuery] int? pageSize,
+			CancellationToken cancellationToken)
 		{
 			IQueryable<Models.Instance> GetBaseQuery()
 			{
-				IQueryable<Models.Instance> query = DatabaseContext.Instances;
-				if (!AuthenticationContext.User.InstanceManagerRights.Value.HasFlag(InstanceManagerRights.List))
+				var query = DatabaseContext
+					.Instances
+					.Where(x => x.SwarmIdentifer == swarmConfigurationOptions.Value.Identifier);
+				if (!AuthenticationContext.PermissionSet.InstanceManagerRights!.Value.HasFlag(InstanceManagerRights.List))
 					query = query
-						.Where(x => x.InstanceUsers.Any(y => y.UserId == AuthenticationContext.User.Id))
-						.Where(x => x.InstanceUsers.Any(instanceUser =>
-							instanceUser.ByondRights != ByondRights.None ||
+						.Where(x => x.InstancePermissionSets.Any(y => y.PermissionSetId == AuthenticationContext.PermissionSet.Id))
+						.Where(x => x.InstancePermissionSets.Any(instanceUser =>
+							instanceUser.EngineRights != EngineRights.None ||
 							instanceUser.ChatBotRights != ChatBotRights.None ||
 							instanceUser.ConfigurationRights != ConfigurationRights.None ||
 							instanceUser.DreamDaemonRights != DreamDaemonRights.None ||
 							instanceUser.DreamMakerRights != DreamMakerRights.None ||
-							instanceUser.InstanceUserRights != InstanceUserRights.None));
+							instanceUser.InstancePermissionSetRights != InstancePermissionSetRights.None));
 
 				// Hack for EF IAsyncEnumerable BS
 				return query.Select(x => x);
@@ -576,29 +597,32 @@ namespace Tgstation.Server.Host.Controllers
 
 			var moveJobs = await GetBaseQuery()
 				.SelectMany(x => x.Jobs)
-#pragma warning disable CA1307 // Specify StringComparison
-				.Where(x => !x.StoppedAt.HasValue && x.Description.StartsWith(MoveInstanceJobPrefix))
-#pragma warning restore CA1307 // Specify StringComparison
-				.Include(x => x.StartedBy).ThenInclude(x => x.CreatedBy)
+				.Where(x => !x.StoppedAt.HasValue && x.JobCode == JobCode.Move)
+				.Include(x => x.StartedBy!)
+					.ThenInclude(x => x.CreatedBy)
 				.Include(x => x.Instance)
-				.ToListAsync(cancellationToken)
-				.ConfigureAwait(false);
-
-			var instances = await GetBaseQuery()
-				.ToListAsync(cancellationToken)
-				.ConfigureAwait(false);
+				.ToListAsync(cancellationToken);
 
 			var needsUpdate = false;
-			foreach (var instance in instances)
-				needsUpdate |= InstanceRequiredController.ValidateInstanceOnlineStatus(instanceManager, Logger, instance);
+			var result = await Paginated<Models.Instance, InstanceResponse>(
+				() => ValueTask.FromResult<PaginatableResult<Models.Instance>?>(
+					new PaginatableResult<Models.Instance>(
+						GetBaseQuery()
+							.OrderBy(x => x.Id))),
+				async instance =>
+				{
+					needsUpdate |= ValidateInstanceOnlineStatus(instance);
+					instance.MoveJob = moveJobs.FirstOrDefault(x => x.Instance!.Id == instance.Id)?.ToApi();
+					await CheckAccessible(instance, cancellationToken);
+				},
+				page,
+				pageSize,
+				cancellationToken);
 
 			if (needsUpdate)
-				await DatabaseContext.Save(cancellationToken).ConfigureAwait(false);
+				await DatabaseContext.Save(cancellationToken);
 
-			var apis = instances.Select(x => x.ToApi());
-			foreach(var I in moveJobs)
-				apis.Where(x => x.Id == I.Instance.Id).First().MoveJob = I.ToApi(); // if this .First() fails i will personally murder kevinz000 because I just know he is somehow responsible
-			return Json(apis);
+			return result;
 		}
 
 		/// <summary>
@@ -606,56 +630,56 @@ namespace Tgstation.Server.Host.Controllers
 		/// </summary>
 		/// <param name="id">The instance <see cref="EntityId.Id"/> to retrieve.</param>
 		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
-		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> of the request.</returns>
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the <see cref="IActionResult"/> of the request.</returns>
 		/// <response code="200">Retrieved <see cref="Api.Models.Instance"/> successfully.</response>
 		/// <response code="410">The database entity for the requested instance could not be retrieved. The instance was likely detached.</response>
 		[HttpGet("{id}")]
 		[TgsAuthorize(InstanceManagerRights.List | InstanceManagerRights.Read)]
-		[ProducesResponseType(typeof(Api.Models.Instance), 200)]
-		[ProducesResponseType(typeof(ErrorMessage), 410)]
-		public async Task<IActionResult> GetId(long id, CancellationToken cancellationToken)
+		[ProducesResponseType(typeof(InstanceResponse), 200)]
+		[ProducesResponseType(typeof(ErrorMessageResponse), 410)]
+		public async ValueTask<IActionResult> GetId(long id, CancellationToken cancellationToken)
 		{
-			var cantList = !AuthenticationContext.User.InstanceManagerRights.Value.HasFlag(InstanceManagerRights.List);
+			var cantList = !AuthenticationContext.PermissionSet.InstanceManagerRights!.Value.HasFlag(InstanceManagerRights.List);
 			IQueryable<Models.Instance> QueryForUser()
 			{
 				var query = DatabaseContext
 					.Instances
-					.AsQueryable()
-					.Where(x => x.Id == id);
+					.Where(x => x.Id == id && x.SwarmIdentifer == swarmConfigurationOptions.Value.Identifier);
 
 				if (cantList)
-					query = query.Include(x => x.InstanceUsers);
+					query = query.Include(x => x.InstancePermissionSets);
 				return query;
 			}
 
-			var instance = await QueryForUser().FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
+			var instance = await QueryForUser().FirstOrDefaultAsync(cancellationToken);
 
 			if (instance == null)
-				return Gone();
+				return this.Gone();
 
-			if (InstanceRequiredController.ValidateInstanceOnlineStatus(instanceManager, Logger, instance))
-				await DatabaseContext.Save(cancellationToken).ConfigureAwait(false);
+			if (ValidateInstanceOnlineStatus(instance))
+				await DatabaseContext.Save(cancellationToken);
 
-			if (cantList && !instance.InstanceUsers.Any(instanceUser => instanceUser.UserId == AuthenticationContext.User.Id &&
-				(instanceUser.ByondRights != ByondRights.None ||
+			if (cantList && !instance.InstancePermissionSets.Any(instanceUser => instanceUser.PermissionSetId == AuthenticationContext.PermissionSet.Require(x => x.Id)
+				&& (instanceUser.RepositoryRights != RepositoryRights.None ||
+				instanceUser.EngineRights != EngineRights.None ||
 				instanceUser.ChatBotRights != ChatBotRights.None ||
 				instanceUser.ConfigurationRights != ConfigurationRights.None ||
 				instanceUser.DreamDaemonRights != DreamDaemonRights.None ||
 				instanceUser.DreamMakerRights != DreamMakerRights.None ||
-				instanceUser.InstanceUserRights != InstanceUserRights.None)))
+				instanceUser.InstancePermissionSetRights != InstancePermissionSetRights.None)))
 				return Forbid();
 
 			var api = instance.ToApi();
 
 			var moveJob = await QueryForUser()
 				.SelectMany(x => x.Jobs)
-#pragma warning disable CA1307 // Specify StringComparison
-				.Where(x => !x.StoppedAt.HasValue && x.Description.StartsWith(MoveInstanceJobPrefix))
-#pragma warning restore CA1307 // Specify StringComparison
-				.Include(x => x.StartedBy).ThenInclude(x => x.CreatedBy)
-				.FirstOrDefaultAsync(cancellationToken)
-				.ConfigureAwait(false);
+				.Where(x => !x.StoppedAt.HasValue && x.JobCode == JobCode.Move)
+				.Include(x => x.StartedBy!)
+					.ThenInclude(x => x.CreatedBy)
+				.Include(x => x.Instance)
+				.FirstOrDefaultAsync(cancellationToken);
 			api.MoveJob = moveJob?.ToApi();
+			await CheckAccessible(api, cancellationToken);
 			return Json(api);
 		}
 
@@ -664,34 +688,208 @@ namespace Tgstation.Server.Host.Controllers
 		/// </summary>
 		/// <param name="id">The instance <see cref="EntityId.Id"/> to give permissions on.</param>
 		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
-		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> of the request.</returns>
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the <see cref="IActionResult"/> of the request.</returns>
 		/// <response code="204">Granted permissions successfully.</response>
 		[HttpPatch("{id}")]
 		[TgsAuthorize(InstanceManagerRights.GrantPermissions)]
 		[ProducesResponseType(204)]
-		public async Task<IActionResult> GrantPermissions(long id, CancellationToken cancellationToken)
+		[ProducesResponseType(typeof(ErrorMessageResponse), 410)]
+		public async ValueTask<IActionResult> GrantPermissions(long id, CancellationToken cancellationToken)
 		{
-			// ensure the current user has write privilege on the instance
-			var usersInstanceUser = await DatabaseContext
+			IQueryable<Models.Instance> BaseQuery() => DatabaseContext
 				.Instances
-				.AsQueryable()
-				.Where(x => x.Id == id)
-				.SelectMany(x => x.InstanceUsers)
-				.Where(x => x.UserId == AuthenticationContext.User.Id)
-				.FirstOrDefaultAsync(cancellationToken)
-				.ConfigureAwait(false);
-			if (usersInstanceUser == default)
+				.Where(x => x.Id == id && x.SwarmIdentifer == swarmConfigurationOptions.Value.Identifier);
+
+			// ensure the current user has write privilege on the instance
+			var usersInstancePermissionSet = await BaseQuery()
+				.SelectMany(x => x.InstancePermissionSets)
+				.Where(x => x.PermissionSetId == AuthenticationContext.PermissionSet.Id)
+				.FirstOrDefaultAsync(cancellationToken);
+			if (usersInstancePermissionSet == default)
 			{
-				var instanceAdminUser = InstanceAdminUser(null);
+				// does the instance actually exist?
+				var instanceExists = await BaseQuery()
+					.AnyAsync(cancellationToken);
+
+				if (!instanceExists)
+					return this.Gone();
+
+				var instanceAdminUser = InstanceAdminPermissionSet(null);
 				instanceAdminUser.InstanceId = id;
-				DatabaseContext.InstanceUsers.Add(instanceAdminUser);
+				DatabaseContext.InstancePermissionSets.Add(instanceAdminUser);
 			}
 			else
-				InstanceAdminUser(usersInstanceUser);
+				InstanceAdminPermissionSet(usersInstancePermissionSet);
 
-			await DatabaseContext.Save(cancellationToken).ConfigureAwait(false);
+			await DatabaseContext.Save(cancellationToken);
 
 			return NoContent();
+		}
+
+		/// <summary>
+		/// Creates a default <see cref="Models.Instance"/> from <paramref name="initialSettings"/>.
+		/// </summary>
+		/// <param name="initialSettings">The <see cref="InstanceCreateRequest"/>.</param>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the new <see cref="Models.Instance"/> or <see langword="null"/> if ports could not be allocated.</returns>
+		async ValueTask<Models.Instance?> CreateDefaultInstance(InstanceCreateRequest initialSettings, CancellationToken cancellationToken)
+		{
+			var ddPort = await portAllocator.GetAvailablePort(1024, false, cancellationToken);
+			if (!ddPort.HasValue)
+				return null;
+
+			// try to use the old default if possible
+			const ushort DefaultDreamDaemonPort = 1337;
+			if (ddPort.Value < DefaultDreamDaemonPort)
+				ddPort = await portAllocator.GetAvailablePort(DefaultDreamDaemonPort, false, cancellationToken) ?? ddPort;
+
+			const ushort DefaultApiValidationPort = 1339;
+			var dmPort = await portAllocator
+				.GetAvailablePort(
+					Math.Min((ushort)(ddPort.Value + 1), DefaultApiValidationPort),
+					false,
+					cancellationToken);
+			if (!dmPort.HasValue)
+				return null;
+
+			// try to use the old default if possible
+			if (dmPort < DefaultApiValidationPort)
+				dmPort = await portAllocator.GetAvailablePort(DefaultApiValidationPort, false, cancellationToken) ?? dmPort;
+
+			return new Models.Instance
+			{
+				ConfigurationType = initialSettings.ConfigurationType ?? ConfigurationType.Disallowed,
+				DreamDaemonSettings = new DreamDaemonSettings
+				{
+					AllowWebClient = false,
+					AutoStart = false,
+					Port = ddPort,
+					OpenDreamTopicPort = 0,
+					SecurityLevel = DreamDaemonSecurity.Safe,
+					Visibility = DreamDaemonVisibility.Public,
+					StartupTimeout = 60,
+					HealthCheckSeconds = 60,
+					DumpOnHealthCheckRestart = false,
+					TopicRequestTimeout = generalConfigurationOptions.Value.ByondTopicTimeout,
+					AdditionalParameters = String.Empty,
+					StartProfiler = false,
+					LogOutput = false,
+					MapThreads = 0,
+					Minidumps = true,
+				},
+				DreamMakerSettings = new DreamMakerSettings
+				{
+					ApiValidationPort = dmPort,
+					ApiValidationSecurityLevel = DreamDaemonSecurity.Safe,
+					DMApiValidationMode = DMApiValidationMode.Required,
+					Timeout = TimeSpan.FromHours(1),
+					CompilerAdditionalArguments = null,
+				},
+				Name = initialSettings.Name,
+				Online = false,
+				Path = initialSettings.Path,
+				AutoUpdateInterval = initialSettings.AutoUpdateInterval ?? 0,
+				AutoUpdateCron = initialSettings.AutoUpdateCron ?? String.Empty,
+				AutoStartCron = initialSettings.AutoStartCron ?? String.Empty,
+				AutoStopCron = initialSettings.AutoStopCron ?? String.Empty,
+				ChatBotLimit = initialSettings.ChatBotLimit ?? Models.Instance.DefaultChatBotLimit,
+				RepositorySettings = new Models.RepositorySettings
+				{
+					CommitterEmail = Components.Repository.Repository.DefaultCommitterEmail,
+					CommitterName = Components.Repository.Repository.DefaultCommitterName,
+					PushTestMergeCommits = false,
+					ShowTestMergeCommitters = false,
+					AutoUpdatesKeepTestMerges = false,
+					AutoUpdatesSynchronize = false,
+					PostTestMergeComment = false,
+					CreateGitHubDeployments = false,
+					UpdateSubmodules = true,
+				},
+				InstancePermissionSets = new List<InstancePermissionSet> // give this user full privileges on the instance
+				{
+					InstanceAdminPermissionSet(null),
+				},
+				SwarmIdentifer = swarmConfigurationOptions.Value.Identifier,
+			};
+		}
+
+		/// <summary>
+		/// Generate an <see cref="InstancePermissionSet"/> with full rights.
+		/// </summary>
+		/// <param name="permissionSetToModify">An optional existing <see cref="InstancePermissionSet"/> to update.</param>
+		/// <returns><paramref name="permissionSetToModify"/> or a new <see cref="InstancePermissionSet"/> with full rights.</returns>
+		InstancePermissionSet InstanceAdminPermissionSet(InstancePermissionSet? permissionSetToModify)
+		{
+			permissionSetToModify ??= new InstancePermissionSet()
+			{
+				PermissionSet = AuthenticationContext.PermissionSet,
+				PermissionSetId = AuthenticationContext.PermissionSet.Require(x => x.Id),
+			};
+			permissionSetToModify.EngineRights = RightsHelper.AllRights<EngineRights>();
+			permissionSetToModify.ChatBotRights = RightsHelper.AllRights<ChatBotRights>();
+			permissionSetToModify.ConfigurationRights = RightsHelper.AllRights<ConfigurationRights>();
+			permissionSetToModify.DreamDaemonRights = RightsHelper.AllRights<DreamDaemonRights>();
+			permissionSetToModify.DreamMakerRights = RightsHelper.AllRights<DreamMakerRights>();
+			permissionSetToModify.RepositoryRights = RightsHelper.AllRights<RepositoryRights>();
+			permissionSetToModify.InstancePermissionSetRights = RightsHelper.AllRights<InstancePermissionSetRights>();
+			return permissionSetToModify;
+		}
+
+		/// <summary>
+		/// Normalize a given <paramref name="path"/> for an instance.
+		/// </summary>
+		/// <param name="path">The path to normalize.</param>
+		/// <returns>The normalized <paramref name="path"/>.</returns>
+		[return: NotNullIfNotNull(nameof(path))]
+		string? NormalizePath(string? path)
+		{
+			if (path == null)
+				return null;
+
+			path = ioManager.ResolvePath(path);
+			path = platformIdentifier.NormalizePath(path);
+
+			return path;
+		}
+
+		/// <summary>
+		/// Populate the <see cref="InstanceResponse.Accessible"/> property of a given <paramref name="instanceResponse"/>.
+		/// </summary>
+		/// <param name="instanceResponse">The <see cref="InstanceResponse"/> to populate.</param>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="ValueTask"/> representing the running operation.</returns>
+		async ValueTask CheckAccessible(InstanceResponse instanceResponse, CancellationToken cancellationToken)
+		{
+			instanceResponse.Accessible = await DatabaseContext
+				.InstancePermissionSets
+				.Where(x => x.InstanceId == instanceResponse.Id && x.PermissionSetId == AuthenticationContext.PermissionSet.Id)
+				.AnyAsync(cancellationToken);
+		}
+
+		/// <summary>
+		/// Validates a given <paramref name="instance"/>'s <see cref="Api.Models.Instance.AutoUpdateCron"/> setting.
+		/// </summary>
+		/// <param name="instance">The <see cref="Api.Models.Instance"/> to validate.</param>
+		/// <returns><see langword="null"/> if <paramref name="instance"/> has a valid <see cref="Api.Models.Instance.AutoUpdateCron"/> setting, a <see cref="BadRequestObjectResult"/> otherwise.</returns>
+		BadRequestObjectResult? ValidateCronSetting(Api.Models.Instance instance)
+		{
+			if (!String.IsNullOrWhiteSpace(instance.AutoUpdateCron))
+			{
+				if ((instance.AutoUpdateInterval.HasValue && instance.AutoUpdateInterval.Value != 0)
+				   || (CrontabSchedule.TryParse(
+					   instance.AutoUpdateCron,
+					   new CrontabSchedule.ParseOptions
+					   {
+						   IncludingSeconds = true,
+					   }) == null))
+					return BadRequest(new ErrorMessageResponse(ErrorCode.ModelValidationFailure));
+
+				instance.AutoUpdateInterval = 0;
+			}
+			else
+				instance.AutoUpdateCron = String.Empty;
+
+			return null;
 		}
 	}
 }

@@ -1,0 +1,42 @@
+name: Sync spacestation13/tgstation-server
+
+on:
+  push:
+    branches:
+      - dev
+    tags:
+      - "*"
+  workflow_dispatch:
+
+concurrency:
+  group: "ss13-mirror-sync"
+  cancel-in-progress: true
+
+jobs:
+  fork-sync:
+    name: Fork Sync
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate App Token
+        id: app-token-generation
+        uses: actions/create-github-app-token@v1
+        with:
+          owner: spacestation13
+          repositories: tgstation-server
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ steps.app-token-generation.outputs.token }}
+
+      - name: Push to Spacestation13 Fork
+        run: |
+          git config user.name "tgstation-server-ci[bot]"
+          git config user.email "161980869+tgstation-server-ci[bot]@users.noreply.github.com"
+          git push "https://tgstation-server-ci:${{ steps.app-token-generation.outputs.token }}@github.com/spacestation13/tgstation-server"
+          git push -f --tags "https://tgstation-server-ci:${{ steps.app-token-generation.outputs.token }}@github.com/spacestation13/tgstation-server"

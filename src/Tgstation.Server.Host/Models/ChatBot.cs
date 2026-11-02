@@ -1,47 +1,64 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
 
+using Tgstation.Server.Api.Models.Response;
+
 namespace Tgstation.Server.Host.Models
 {
-	/// <inheritdoc />
-	public sealed class ChatBot : Api.Models.Internal.ChatBot
+	/// <inheritdoc cref="Api.Models.Internal.ChatBotSettings" />
+	public sealed class ChatBot : Api.Models.Internal.ChatBotSettings, ILegacyApiTransformable<ChatBotResponse>
 	{
 		/// <summary>
-		/// Default for <see cref="Api.Models.Internal.ChatBot.ChannelLimit"/>.
+		/// Default for <see cref="Api.Models.Internal.ChatBotSettings.ChannelLimit"/>.
 		/// </summary>
 		public const ushort DefaultChannelLimit = 100;
 
 		/// <summary>
-		/// The instance <see cref="Api.Models.EntityId.Id"/>
+		/// The instance <see cref="Api.Models.EntityId.Id"/>.
 		/// </summary>
 		public long InstanceId { get; set; }
 
 		/// <summary>
-		/// The parent <see cref="Models.Instance"/>
+		/// The parent <see cref="Models.Instance"/>.
 		/// </summary>
 		[Required]
-		public Instance Instance { get; set; }
+		public Instance? Instance { get; set; }
 
 		/// <summary>
-		/// See <see cref="Api.Models.ChatBot.Channels"/>
+		/// See <see cref="Api.Models.Internal.ChatBotApiBase.Channels"/>.
 		/// </summary>
 		public ICollection<ChatChannel> Channels { get; set; }
 
 		/// <summary>
-		/// Convert the <see cref="ChatBot"/> to it's API form
+		/// Initializes a new instance of the <see cref="ChatBot"/> class.
 		/// </summary>
-		/// <returns>A new <see cref="Api.Models.ChatBot"/></returns>
-		public Api.Models.ChatBot ToApi() => new Api.Models.ChatBot
+		public ChatBot()
+			: this(new List<ChatChannel>())
 		{
-			Channels = Channels.Select(x => x.ToApi()).ToList(),
+		}
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="ChatBot"/> class.
+		/// </summary>
+		/// <param name="channels">The value of <see cref="Channels"/>.</param>
+		public ChatBot(ICollection<ChatChannel> channels)
+		{
+			Channels = channels ?? throw new ArgumentNullException(nameof(channels));
+		}
+
+		/// <inheritdoc />
+		public ChatBotResponse ToApi() => new()
+		{
+			Channels = Channels.Select(x => x.ToApi(this.Require(x => x.Provider))).ToList(),
 			ConnectionString = ConnectionString,
 			Enabled = Enabled,
 			Provider = Provider,
 			Id = Id,
 			Name = Name,
 			ChannelLimit = ChannelLimit,
-			ReconnectionInterval = ReconnectionInterval
+			ReconnectionInterval = ReconnectionInterval,
 		};
 	}
 }

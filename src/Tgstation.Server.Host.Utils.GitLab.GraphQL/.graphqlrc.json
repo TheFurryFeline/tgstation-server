@@ -1,0 +1,18 @@
+{
+  "schema": "schema.graphql",
+  "documents": "**/*.graphql",
+  "extensions": {
+    "strawberryShake": {
+      "name": "GraphQLClient",
+      "url": "https://gitlab.com/api/graphql",
+      "namespace": "Tgstation.Server.Host.Utils.GitLab.GraphQL",
+      "dependencyInjection": true,
+      "transportProfiles": [
+        {
+          "default": "Http",
+          "subscription": "Http"
+        }
+      ]
+    }
+  }
+}

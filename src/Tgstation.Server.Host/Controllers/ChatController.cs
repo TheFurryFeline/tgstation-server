@@ -1,220 +1,228 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Linq.Expressions;
-using System.Net;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+
 using Tgstation.Server.Api;
 using Tgstation.Server.Api.Models;
+using Tgstation.Server.Api.Models.Internal;
+using Tgstation.Server.Api.Models.Request;
+using Tgstation.Server.Api.Models.Response;
 using Tgstation.Server.Api.Rights;
+using Tgstation.Server.Host.Authority;
 using Tgstation.Server.Host.Components;
+using Tgstation.Server.Host.Controllers.Results;
 using Tgstation.Server.Host.Database;
+using Tgstation.Server.Host.Extensions;
 using Tgstation.Server.Host.Models;
 using Tgstation.Server.Host.Security;
-using Z.EntityFramework.Plus;
+using Tgstation.Server.Host.Utils;
 
 namespace Tgstation.Server.Host.Controllers
 {
 	/// <summary>
-	/// <see cref="ApiController"/> for managing <see cref="Api.Models.ChatBot"/>s
+	/// <see cref="ApiController"/> for managing <see cref="ChatBot"/>s.
 	/// </summary>
 	[Route(Routes.Chat)]
-	#pragma warning disable CA1506 // TODO: Decomplexify
+#pragma warning disable CA1506 // TODO: Decomplexify
 	public sealed class ChatController : InstanceRequiredController
 	{
 		/// <summary>
-		/// Construct a <see cref="ChatController"/>
+		/// The <see cref="IRestAuthorityInvoker{TAuthority}"/> for the <see cref="IChatAuthority"/>.
 		/// </summary>
-		/// <param name="databaseContext">The <see cref="IDatabaseContext"/> for the <see cref="ApiController"/></param>
-		/// <param name="authenticationContextFactory">The <see cref="IAuthenticationContextFactory"/> for the <see cref="ApiController"/></param>
+		readonly IRestAuthorityInvoker<IChatAuthority> chatAuthority;
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="ChatController"/> class.
+		/// </summary>
+		/// <param name="chatAuthority">The value of <see cref="chatAuthority"/>.</param>
+		/// <param name="databaseContext">The <see cref="IDatabaseContext"/> for the <see cref="InstanceRequiredController"/>.</param>
+		/// <param name="authenticationContext">The <see cref="IAuthenticationContext"/> for the <see cref="InstanceRequiredController"/>.</param>
+		/// <param name="logger">The <see cref="ILogger"/> for the <see cref="InstanceRequiredController"/>.</param>
 		/// <param name="instanceManager">The <see cref="IInstanceManager"/> for the <see cref="InstanceRequiredController"/>.</param>
-		/// <param name="logger">The <see cref="ILogger"/> for the <see cref="ApiController"/></param>
+		/// <param name="apiHeaders">The <see cref="IApiHeadersProvider"/> for the <see cref="InstanceRequiredController"/>.</param>
 		public ChatController(
+			IRestAuthorityInvoker<IChatAuthority> chatAuthority,
 			IDatabaseContext databaseContext,
-			IAuthenticationContextFactory authenticationContextFactory,
+			IAuthenticationContext authenticationContext,
+			ILogger<ChatController> logger,
 			IInstanceManager instanceManager,
-			ILogger<ChatController> logger)
+			IApiHeadersProvider apiHeaders)
 			: base(
-				  instanceManager,
 				  databaseContext,
-				  authenticationContextFactory,
-				  logger)
+				  authenticationContext,
+				  logger,
+				  instanceManager,
+				  apiHeaders)
 		{
+			this.chatAuthority = chatAuthority ?? throw new ArgumentNullException(nameof(chatAuthority));
 		}
 
 		/// <summary>
-		/// Converts <paramref name="api"/> to a <see cref="ChatChannel"/>
+		/// Converts <paramref name="api"/> to a <see cref="ChatChannel"/>.
 		/// </summary>
-		/// <param name="api">The <see cref="Api.Models.ChatChannel"/> </param>
-		/// <returns>A <see cref="ChatChannel"/> based on <paramref name="api"/></returns>
-		static Models.ChatChannel ConvertApiChatChannel(Api.Models.ChatChannel api) => new Models.ChatChannel
+		/// <param name="api">The <see cref="Api.Models.ChatChannel"/>. </param>
+		/// <param name="chatProvider">The channel's <see cref="ChatProvider"/>.</param>
+		/// <returns>A <see cref="ChatChannel"/> based on <paramref name="api"/>.</returns>
+		static Models.ChatChannel ConvertApiChatChannel(Api.Models.ChatChannel api, ChatProvider chatProvider)
 		{
-			DiscordChannelId = api.DiscordChannelId,
-			IrcChannel = api.IrcChannel,
-			IsAdminChannel = api.IsAdminChannel ?? false,
-			IsWatchdogChannel = api.IsWatchdogChannel ?? false,
-			IsUpdatesChannel = api.IsUpdatesChannel ?? false,
-			Tag = api.Tag
-		};
+			var result = new Models.ChatChannel
+			{
+				IsAdminChannel = api.IsAdminChannel ?? false,
+				IsWatchdogChannel = api.IsWatchdogChannel ?? false,
+				IsUpdatesChannel = api.IsUpdatesChannel ?? false,
+				IsSystemChannel = api.IsSystemChannel ?? false,
+				Tag = api.Tag,
+			};
+
+			if (api.ChannelData != null)
+			{
+				switch (chatProvider)
+				{
+					case ChatProvider.Discord:
+						result.DiscordChannelId = UInt64.Parse(api.ChannelData, CultureInfo.InvariantCulture);
+						break;
+					case ChatProvider.Irc:
+						result.IrcChannel = api.ChannelData;
+						break;
+					default:
+						throw new InvalidOperationException($"Invalid chat provider: {chatProvider}");
+				}
+			}
+
+			return result;
+		}
 
 		/// <summary>
 		/// Create a new chat bot <paramref name="model"/>.
 		/// </summary>
-		/// <param name="model">The <see cref="Api.Models.ChatBot"/> to create.</param>
+		/// <param name="model">The <see cref="ChatBotCreateRequest"/>.</param>
 		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
-		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> for the operation.</returns>
-		/// <response code="201">Created chat bot successfully.</response>
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the <see cref="IActionResult"/> for the operation.</returns>
+		/// <response code="201">Created <see cref="ChatBot"/> successfully.</response>
 		[HttpPut]
-		[TgsAuthorize(ChatBotRights.Create)]
-		[ProducesResponseType(typeof(Api.Models.ChatBot), 201)]
-		public async Task<IActionResult> Create([FromBody] Api.Models.ChatBot model, CancellationToken cancellationToken)
+		[ProducesResponseType(typeof(ChatBotResponse), 201)]
+		public async ValueTask<IActionResult> Create([FromBody] ChatBotCreateRequest model, CancellationToken cancellationToken)
 		{
-			if (model == null)
-				throw new ArgumentNullException(nameof(model));
+			ArgumentNullException.ThrowIfNull(model);
 
-			var earlyOut = StandardModelChecks(model, true);
-			if (earlyOut != null)
-				return earlyOut;
+			if (!model.Provider.HasValue)
+				return BadRequest(new ErrorMessageResponse(ErrorCode.ChatBotProviderMissing));
 
-			var countOfExistingBotsInInstance = await DatabaseContext
-				.ChatBots
-				.AsQueryable()
-				.Where(x => x.InstanceId == Instance.Id)
-				.CountAsync(cancellationToken)
-				.ConfigureAwait(false);
+			if (String.IsNullOrWhiteSpace(model.Name))
+				return BadRequest(new ErrorMessageResponse(ErrorCode.ChatBotWhitespaceName));
 
-			if (countOfExistingBotsInInstance >= Instance.ChatBotLimit.Value)
-				return Conflict(new ErrorMessage(ErrorCode.ChatBotMax));
+			if (String.IsNullOrWhiteSpace(model.ConnectionString))
+				return BadRequest(new ErrorMessageResponse(ErrorCode.ChatBotWhitespaceConnectionString));
 
-			model.Enabled ??= false;
-			model.ReconnectionInterval ??= 1;
+			if (!model.ValidateProviderChannelTypes())
+				return BadRequest(new ErrorMessageResponse(ErrorCode.ChatBotWrongChannelType));
 
-			// try to update das db first
-			var dbModel = new Models.ChatBot
-			{
-				Name = model.Name,
-				ConnectionString = model.ConnectionString,
-				Enabled = model.Enabled,
-				Channels = model.Channels?.Select(x => ConvertApiChatChannel(x)).ToList() ?? new List<Models.ChatChannel>(), // important that this isn't null
-				InstanceId = Instance.Id,
-				Provider = model.Provider,
-				ReconnectionInterval = model.ReconnectionInterval,
-				ChannelLimit = model.ChannelLimit
-			};
+			var newChannels = model.Channels?.Select(x => ConvertApiChatChannel(x, model.Provider!.Value)).ToList() ?? new List<Models.ChatChannel>(); // important that this isn't null
 
-			DatabaseContext.ChatBots.Add(dbModel);
-
-			await DatabaseContext.Save(cancellationToken).ConfigureAwait(false);
-			return await WithComponentInstance(
-				async instance =>
-				{
-					try
-					{
-						// try to create it
-						await instance.Chat.ChangeSettings(dbModel, cancellationToken).ConfigureAwait(false);
-
-						if (dbModel.Channels.Count > 0)
-							await instance.Chat.ChangeChannels(dbModel.Id, dbModel.Channels, cancellationToken).ConfigureAwait(false);
-					}
-					catch
-					{
-						// undo the add
-						DatabaseContext.ChatBots.Remove(dbModel);
-
-						// DCTx2: Operations must always run
-						await DatabaseContext.Save(default).ConfigureAwait(false);
-						await instance.Chat.DeleteConnection(dbModel.Id, default).ConfigureAwait(false);
-						throw;
-					}
-
-					return null;
-				})
-				.ConfigureAwait(false)
-				?? StatusCode(HttpStatusCode.Created, dbModel.ToApi());
+			return await chatAuthority.InvokeTransformable<ChatBot, ChatBotResponse>(
+				this,
+				authority => authority.Create(
+					newChannels,
+					model.Name,
+					model.ConnectionString,
+					model.Provider.Value,
+					Instance.Require(x => x.Id),
+					model.ReconnectionInterval,
+					model.ChannelLimit,
+					model.Enabled ?? false,
+					cancellationToken));
 		}
 
 		/// <summary>
-		/// Delete a <see cref="Api.Models.ChatBot"/>.
+		/// Delete a <see cref="ChatBot"/>.
 		/// </summary>
-		/// <param name="id">The <see cref="Api.Models.Internal.ChatBot.Id"/> to delete.</param>
+		/// <param name="id">The <see cref="EntityId.Id"/> to delete.</param>
 		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
-		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> for the operation.</returns>
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the <see cref="IActionResult"/> for the operation.</returns>
 		/// <response code="204">Chat bot deleted or does not exist.</response>
 		[HttpDelete("{id}")]
 		[TgsAuthorize(ChatBotRights.Delete)]
 		[ProducesResponseType(204)]
-		public async Task<IActionResult> Delete(long id, CancellationToken cancellationToken)
-			=> await WithComponentInstance(
+		public async ValueTask<IActionResult> Delete(long id, CancellationToken cancellationToken)
+			=> await WithComponentInstanceNullable(
 				async instance =>
 				{
 					await Task.WhenAll(
 						instance.Chat.DeleteConnection(id, cancellationToken),
 						DatabaseContext
 							.ChatBots
-							.AsQueryable()
 							.Where(x => x.Id == id)
-							.DeleteAsync(cancellationToken))
-						.ConfigureAwait(false);
+							.ExecuteDeleteAsync(cancellationToken));
 					return null;
 				})
-				.ConfigureAwait(false)
+
 				?? NoContent();
 
 		/// <summary>
-		/// List <see cref="Api.Models.ChatBot"/>s.
+		/// List <see cref="ChatBot"/>s.
 		/// </summary>
+		/// <param name="page">The current page.</param>
+		/// <param name="pageSize">The page size.</param>
 		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
-		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> for the operation.</returns>
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the <see cref="IActionResult"/> for the operation.</returns>
 		/// <response code="200">Listed chat bots successfully.</response>
 		[HttpGet(Routes.List)]
 		[TgsAuthorize(ChatBotRights.Read)]
-		[ProducesResponseType(typeof(IEnumerable<Api.Models.ChatBot>), 200)]
-		public async Task<IActionResult> List(CancellationToken cancellationToken)
+		[ProducesResponseType(typeof(PaginatedResponse<ChatBotResponse>), 200)]
+		public ValueTask<IActionResult> List([FromQuery] int? page, [FromQuery] int? pageSize, CancellationToken cancellationToken)
 		{
-			var query = DatabaseContext
-				.ChatBots
-				.AsQueryable()
-				.Where(x => x.InstanceId == Instance.Id)
-				.Include(x => x.Channels);
-
-			var results = await query.ToListAsync(cancellationToken).ConfigureAwait(false);
-
 			var connectionStrings = (AuthenticationContext.GetRight(RightsType.ChatBots) & (ulong)ChatBotRights.ReadConnectionString) != 0;
+			return Paginated<ChatBot, ChatBotResponse>(
+				() => ValueTask.FromResult<PaginatableResult<ChatBot>?>(
+					new PaginatableResult<ChatBot>(
+						DatabaseContext
+							.ChatBots
+							.Where(x => x.InstanceId == Instance.Id)
+							.Include(x => x.Channels)
+							.OrderBy(x => x.Id))),
+				chatBot =>
+				{
+					if (!connectionStrings)
+						chatBot.ConnectionString = null;
 
-			if (!connectionStrings)
-				foreach (var I in results)
-					I.ConnectionString = null;
-
-			return Json(results.Select(x => x.ToApi()));
+					return ValueTask.CompletedTask;
+				},
+				page,
+				pageSize,
+				cancellationToken);
 		}
 
 		/// <summary>
-		/// Get a specific <see cref="Api.Models.ChatBot"/>.
+		/// Get a specific <see cref="ChatBot"/>.
 		/// </summary>
-		/// <param name="id">The <see cref="Api.Models.Internal.ChatBot.Id"/> to retrieve.</param>
+		/// <param name="id">The <see cref="EntityId.Id"/> to retrieve.</param>
 		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
-		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> for the operation.</returns>
-		/// <response code="200">Retrieved <see cref="Api.Models.ChatBot"/> successfully.</response>
-		/// <response code="410">The <see cref="Api.Models.ChatBot"/> with the given ID does not exist in this instance.</response>
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the <see cref="IActionResult"/> for the operation.</returns>
+		/// <response code="200">Retrieved <see cref="ChatBot"/> successfully.</response>
+		/// <response code="410">The <see cref="ChatBot"/> with the given ID does not exist in this instance.</response>
 		[HttpGet("{id}")]
 		[TgsAuthorize(ChatBotRights.Read)]
-		[ProducesResponseType(typeof(Api.Models.ChatBot), 200)]
-		[ProducesResponseType(typeof(ErrorMessage), 410)]
-		public async Task<IActionResult> GetId(long id, CancellationToken cancellationToken)
+		[ProducesResponseType(typeof(ChatBotResponse), 200)]
+		[ProducesResponseType(typeof(ErrorMessageResponse), 410)]
+		public async ValueTask<IActionResult> GetId(long id, CancellationToken cancellationToken)
 		{
-			var query = DatabaseContext.ChatBots
-				.AsQueryable()
+			var query = DatabaseContext
+				.ChatBots
 				.Where(x => x.Id == id && x.InstanceId == Instance.Id)
 				.Include(x => x.Channels);
 
-			var results = await query.FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
+			var results = await query.FirstOrDefaultAsync(cancellationToken);
 			if (results == default)
-				return Gone();
+				return this.Gone();
 
 			var connectionStrings = (AuthenticationContext.GetRight(RightsType.ChatBots) & (ulong)ChatBotRights.ReadConnectionString) != 0;
 
@@ -227,43 +235,41 @@ namespace Tgstation.Server.Host.Controllers
 		/// <summary>
 		/// Updates a chat bot <paramref name="model"/>.
 		/// </summary>
-		/// <param name="model">The <see cref="Api.Models.ChatBot"/> update to apply.</param>
+		/// <param name="model">The <see cref="ChatBotUpdateRequest"/>.</param>
 		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
-		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IActionResult"/> for the operation.</returns>
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the <see cref="IActionResult"/> for the operation.</returns>
 		/// <response code="200">Update applied successfully.</response>
-		/// <response code="204">Update applied successfully. <see cref="Api.Models.ChatBot"/> not returned based on user permissions.</response>
-		/// <response code="410">The <see cref="Api.Models.ChatBot"/> with the given ID does not exist in this instance.</response>
+		/// <response code="204">Update applied successfully. <see cref="ChatBot"/> not returned based on user permissions.</response>
+		/// <response code="410">The <see cref="ChatBot"/> with the given ID does not exist in this instance.</response>
 		[HttpPost]
 		[TgsAuthorize(ChatBotRights.WriteChannels | ChatBotRights.WriteConnectionString | ChatBotRights.WriteEnabled | ChatBotRights.WriteName | ChatBotRights.WriteProvider)]
-		[ProducesResponseType(typeof(Api.Models.ChatBot), 200)]
+		[ProducesResponseType(typeof(ChatBotResponse), 200)]
 		[ProducesResponseType(204)]
-		[ProducesResponseType(typeof(ErrorMessage), 410)]
-		#pragma warning disable CA1502, CA1506 // TODO: Decomplexify
-		public async Task<IActionResult> Update([FromBody] Api.Models.ChatBot model, CancellationToken cancellationToken)
-		#pragma warning restore CA1502, CA1506
+		[ProducesResponseType(typeof(ErrorMessageResponse), 410)]
+#pragma warning disable CA1502, CA1506 // TODO: Decomplexify
+		public async ValueTask<IActionResult> Update([FromBody] ChatBotUpdateRequest model, CancellationToken cancellationToken)
+#pragma warning restore CA1502, CA1506
 		{
-			if (model == null)
-				throw new ArgumentNullException(nameof(model));
+			ArgumentNullException.ThrowIfNull(model);
 
-			var earlyOut = StandardModelChecks(model, false);
+			IActionResult? earlyOut = StandardModelChecks(model, false);
 			if (earlyOut != null)
 				return earlyOut;
 
 			var query = DatabaseContext
 				.ChatBots
-				.AsQueryable()
 				.Where(x => x.InstanceId == Instance.Id && x.Id == model.Id)
 				.Include(x => x.Channels);
 
-			var current = await query.FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
+			var current = await query.FirstOrDefaultAsync(cancellationToken);
 
 			if (current == default)
-				return Gone();
+				return this.Gone();
 
-			if ((model.Channels?.Count ?? current.Channels.Count) > (model.ChannelLimit ?? current.ChannelLimit.Value))
+			if ((model.Channels?.Count ?? current.Channels!.Count) > (model.ChannelLimit ?? current.ChannelLimit!.Value))
 			{
 				// 400 or 409 depends on if the client sent both
-				var errorMessage = new ErrorMessage(ErrorCode.ChatBotMaxChannels);
+				var errorMessage = new ErrorMessageResponse(ErrorCode.ChatBotMaxChannels);
 				if (model.Channels != null && model.ChannelLimit.HasValue)
 					return BadRequest(errorMessage);
 				return Conflict(errorMessage);
@@ -273,7 +279,7 @@ namespace Tgstation.Server.Host.Controllers
 
 			bool anySettingsModified = false;
 
-			bool CheckModified<T>(Expression<Func<Api.Models.Internal.ChatBot, T>> expression, ChatBotRights requiredRight)
+			bool CheckModified<T>(Expression<Func<ChatBotSettings, T>> expression, ChatBotRights requiredRight)
 			{
 				var memberSelectorExpression = (MemberExpression)expression.Body;
 				var property = (PropertyInfo)memberSelectorExpression.Member;
@@ -303,32 +309,31 @@ namespace Tgstation.Server.Host.Controllers
 			var hasChannels = model.Channels != null;
 			if (hasChannels || (model.Provider.HasValue && model.Provider != oldProvider))
 			{
-				DatabaseContext.ChatChannels.RemoveRange(current.Channels);
+				DatabaseContext.ChatChannels.RemoveRange(current.Channels!);
 				if (hasChannels)
 				{
-					var dbChannels = model.Channels.Select(x => ConvertApiChatChannel(x)).ToList();
+					var dbChannels = model.Channels!.Select(x => ConvertApiChatChannel(x, model.Provider ?? current.Provider!.Value)).ToList();
 					DatabaseContext.ChatChannels.AddRange(dbChannels);
 					current.Channels = dbChannels;
 				}
 				else
-					current.Channels.Clear();
+					current.Channels!.Clear();
 			}
 
-			await DatabaseContext.Save(cancellationToken).ConfigureAwait(false);
+			await DatabaseContext.Save(cancellationToken);
 
-			earlyOut = await WithComponentInstance(
+			earlyOut = await WithComponentInstanceNullable(
 				async instance =>
 				{
 					var chat = instance.Chat;
 					if (anySettingsModified)
-						await chat.ChangeSettings(current, cancellationToken).ConfigureAwait(false); // have to rebuild the thing first
+						await chat.ChangeSettings(current, cancellationToken); // have to rebuild the thing first
 
-					if (model.Channels != null || anySettingsModified)
-						await chat.ChangeChannels(current.Id, current.Channels, cancellationToken).ConfigureAwait(false);
+					if ((model.Channels != null || anySettingsModified) && current.Enabled!.Value)
+						await chat.ChangeChannels(current.Id!.Value, current.Channels, cancellationToken);
 
 					return null;
-				})
-				.ConfigureAwait(false);
+				});
 			if (earlyOut != null)
 				return earlyOut;
 
@@ -345,29 +350,29 @@ namespace Tgstation.Server.Host.Controllers
 		/// <summary>
 		/// Perform some basic validation of a given <paramref name="model"/>.
 		/// </summary>
-		/// <param name="model">The <see cref="Api.Models.ChatBot"/> to validate.</param>
+		/// <param name="model">The <see cref="ChatBotApiBase"/> to validate.</param>
 		/// <param name="forCreation">If the <paramref name="model"/> is being created.</param>
-		/// <returns>An <see cref="IActionResult"/> to respond with or <see langword="null"/>.</returns>
-		private IActionResult StandardModelChecks(Api.Models.ChatBot model, bool forCreation)
+		/// <returns>An <see cref="BadRequestObjectResult"/> to respond with or <see langword="null"/>.</returns>
+		BadRequestObjectResult? StandardModelChecks(ChatBotApiBase model, bool forCreation)
 		{
 			if (model.ReconnectionInterval == 0)
 				throw new InvalidOperationException("RecconnectionInterval cannot be zero!");
 
 			if (forCreation && !model.Provider.HasValue)
-				return BadRequest(new ErrorMessage(ErrorCode.ChatBotProviderMissing));
+				return BadRequest(new ErrorMessageResponse(ErrorCode.ChatBotProviderMissing));
 
 			if (model.Name != null && String.IsNullOrWhiteSpace(model.Name))
-				return BadRequest(new ErrorMessage(ErrorCode.ChatBotWhitespaceName));
+				return BadRequest(new ErrorMessageResponse(ErrorCode.ChatBotWhitespaceName));
 
 			if (model.ConnectionString != null && String.IsNullOrWhiteSpace(model.ConnectionString))
-				return BadRequest(new ErrorMessage(ErrorCode.ChatBotWhitespaceConnectionString));
+				return BadRequest(new ErrorMessageResponse(ErrorCode.ChatBotWhitespaceConnectionString));
 
 			if (!model.ValidateProviderChannelTypes())
-				return BadRequest(new ErrorMessage(ErrorCode.ChatBotWrongChannelType));
+				return BadRequest(new ErrorMessageResponse(ErrorCode.ChatBotWrongChannelType));
 
-			var defaultMaxChannels = (ulong)Math.Max(Models.ChatBot.DefaultChannelLimit, model.Channels?.Count ?? 0);
+			var defaultMaxChannels = (ulong)Math.Max(ChatBot.DefaultChannelLimit, model.Channels?.Count ?? 0);
 			if (defaultMaxChannels > UInt16.MaxValue)
-				return BadRequest(new ErrorMessage(ErrorCode.ChatBotMaxChannels));
+				return BadRequest(new ErrorMessageResponse(ErrorCode.ChatBotMaxChannels));
 
 			if (forCreation)
 				model.ChannelLimit ??= (ushort)defaultMaxChannels;
@@ -375,5 +380,5 @@ namespace Tgstation.Server.Host.Controllers
 			return null;
 		}
 	}
-	#pragma warning restore CA1506
+#pragma warning restore CA1506
 }

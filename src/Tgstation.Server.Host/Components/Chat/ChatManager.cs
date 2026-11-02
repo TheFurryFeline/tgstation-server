@@ -1,91 +1,101 @@
-using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
-using Serilog.Context;
-using System;
+﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+
+using Microsoft.Extensions.Logging;
+
+using Newtonsoft.Json;
+
+using Serilog.Context;
+
+using Tgstation.Server.Api.Models;
 using Tgstation.Server.Api.Models.Internal;
+using Tgstation.Server.Common.Extensions;
 using Tgstation.Server.Host.Components.Chat.Commands;
 using Tgstation.Server.Host.Components.Chat.Providers;
+using Tgstation.Server.Host.Components.Interop;
 using Tgstation.Server.Host.Core;
-using Tgstation.Server.Host.IO;
+using Tgstation.Server.Host.Utils;
 
 namespace Tgstation.Server.Host.Components.Chat
 {
-	/// <inheritdoc />
-	// TODO: Decomplexify
-	#pragma warning disable CA1506
+	/// <inheritdoc cref="IChatManager" />
+#pragma warning disable CA1506 // TODO: Decomplexify
 	sealed class ChatManager : IChatManager, IRestartHandler
 	{
-		const string CommonMention = "!tgs";
+		/// <summary>
+		/// The common bot mention.
+		/// </summary>
+		public const string CommonMention = "!tgs";
 
 		/// <summary>
-		/// The <see cref="IProviderFactory"/> for the <see cref="ChatManager"/>
+		/// The name of the built-in help command.
+		/// </summary>
+		const string HelpCommandName = "help";
+
+		/// <summary>
+		/// The <see cref="IProviderFactory"/> for the <see cref="ChatManager"/>.
 		/// </summary>
 		readonly IProviderFactory providerFactory;
 
 		/// <summary>
-		/// The <see cref="IIOManager"/> for the <see cref="ChatManager"/>
-		/// </summary>
-		readonly IIOManager ioManager;
-
-		/// <summary>
-		/// The <see cref="ICommandFactory"/> for the <see cref="ChatManager"/>
+		/// The <see cref="ICommandFactory"/> for the <see cref="ChatManager"/>.
 		/// </summary>
 		readonly ICommandFactory commandFactory;
 
 		/// <summary>
-		/// The <see cref="IRestartRegistration"/> for the <see cref="ChatManager"/>
+		/// The <see cref="IRestartRegistration"/> for the <see cref="ChatManager"/>.
 		/// </summary>
 		readonly IRestartRegistration restartRegistration;
 
 		/// <summary>
-		/// The <see cref="IAsyncDelayer"/> for the <see cref="ChatManager"/>
-		/// </summary>
-		readonly IAsyncDelayer asyncDelayer;
-
-		/// <summary>
-		/// The <see cref="ILoggerFactory"/> for the <see cref="ChatManager"/>
+		/// The <see cref="ILoggerFactory"/> for the <see cref="ChatManager"/>.
 		/// </summary>
 		readonly ILoggerFactory loggerFactory;
 
 		/// <summary>
-		/// The <see cref="ILogger"/> for the <see cref="ChatManager"/>
+		/// The <see cref="ILogger"/> for the <see cref="ChatManager"/>.
 		/// </summary>
 		readonly ILogger<ChatManager> logger;
 
 		/// <summary>
-		/// Unchanging <see cref="ICommand"/>s in the <see cref="ChatManager"/> mapped by <see cref="ICommand.Name"/>
+		/// Unchanging <see cref="ICommand"/>s in the <see cref="ChatManager"/> mapped by <see cref="ICommand.Name"/>.
 		/// </summary>
-		readonly IDictionary<string, ICommand> builtinCommands;
+		readonly Dictionary<string, ICommand> builtinCommands;
 
 		/// <summary>
-		/// Map of <see cref="IProvider"/>s in use, keyed by <see cref="ChatBot.Id"/>
+		/// Map of <see cref="IProvider"/>s in use, keyed by <see cref="ChatBotSettings"/> <see cref="EntityId.Id"/>.
 		/// </summary>
-		readonly IDictionary<long, IProvider> providers;
+		readonly Dictionary<long, IProvider> providers;
 
 		/// <summary>
-		/// Map of <see cref="ChannelRepresentation.RealId"/>s to <see cref="ChannelMapping"/>s
+		/// Map of <see cref="SemaphoreSlim"/>s used to guard concurrent access to <see cref="ChangeChannels(long, IEnumerable{Models.ChatChannel}, CancellationToken)"/>, keyed by <see cref="ChatBotSettings"/> <see cref="EntityId.Id"/>.
 		/// </summary>
-		readonly IDictionary<ulong, ChannelMapping> mappedChannels;
+		readonly ConcurrentDictionary<long, SemaphoreSlim> changeChannelSemaphores;
 
 		/// <summary>
-		/// The active <see cref="IChatTrackingContext"/>s for the <see cref="ChatManager"/>
+		/// Map of <see cref="ChannelRepresentation.RealId"/>s to <see cref="ChannelMapping"/>s.
 		/// </summary>
-		readonly IList<IChatTrackingContext> trackingContexts;
+		readonly Dictionary<ulong, ChannelMapping> mappedChannels;
 
 		/// <summary>
-		/// The <see cref="CancellationTokenSource"/> for <see cref="chatHandler"/>
+		/// The active <see cref="IChatTrackingContext"/>s for the <see cref="ChatManager"/>.
 		/// </summary>
-		readonly CancellationTokenSource handlerCts;
+		readonly List<IChatTrackingContext> trackingContexts;
 
 		/// <summary>
-		/// The active <see cref="Models.ChatBot"/> for the <see cref="ChatManager"/>
+		/// The active <see cref="Models.ChatBot"/> for the <see cref="ChatManager"/>.
 		/// </summary>
 		readonly List<Models.ChatBot> activeChatBots;
+
+		/// <summary>
+		/// The <see cref="CancellationTokenSource"/> for <see cref="chatHandler"/>.
+		/// </summary>
+		readonly CancellationTokenSource handlerCts;
 
 		/// <summary>
 		/// Used for various lock statements throughout this <see langword="class"/>.
@@ -93,22 +103,32 @@ namespace Tgstation.Server.Host.Components.Chat
 		readonly object synchronizationLock;
 
 		/// <summary>
-		/// The <see cref="ICustomCommandHandler"/> for the <see cref="ChangeChannels(long, IEnumerable{Api.Models.ChatChannel}, CancellationToken)"/>
+		/// The <see cref="ICustomCommandHandler"/> for the <see cref="ChangeChannels(long, IEnumerable{Models.ChatChannel}, CancellationToken)"/>.
 		/// </summary>
-		ICustomCommandHandler customCommandHandler;
+		ICustomCommandHandler? customCommandHandler;
 
 		/// <summary>
-		/// The <see cref="Task"/> that monitors incoming chat messages
+		/// The <see cref="Task"/> that monitors incoming chat messages.
 		/// </summary>
-		Task chatHandler;
+		Task? chatHandler;
 
 		/// <summary>
-		/// The <see cref="TaskCompletionSource{TResult}"/> that completes when <see cref="ChatBot"/>s change
+		/// A <see cref="Task"/> that represents the <see cref="IProvider"/>s initial connection.
 		/// </summary>
-		TaskCompletionSource<object> connectionsUpdated;
+		Task? initialProviderConnectionsTask;
 
 		/// <summary>
-		/// Used for remapping <see cref="ChannelRepresentation.RealId"/>s
+		/// A <see cref="Task"/> that represents all sent messages.
+		/// </summary>
+		Task messageSendTask;
+
+		/// <summary>
+		/// The <see cref="TaskCompletionSource"/> that completes when <see cref="ChatBotSettings"/>s change.
+		/// </summary>
+		TaskCompletionSource connectionsUpdated;
+
+		/// <summary>
+		/// Used for remapping <see cref="ChannelRepresentation.RealId"/>s.
 		/// </summary>
 		ulong channelIdCounter;
 
@@ -118,24 +138,25 @@ namespace Tgstation.Server.Host.Components.Chat
 		long messagesProcessed;
 
 		/// <summary>
-		/// Construct a <see cref="ChatManager"/>
+		/// Initializes a new instance of the <see cref="ChatManager"/> class.
 		/// </summary>
-		/// <param name="providerFactory">The value of <see cref="providerFactory"/></param>
-		/// <param name="ioManager">The value of <see cref="ioManager"/></param>
-		/// <param name="commandFactory">The value of <see cref="commandFactory"/></param>
-		/// <param name="serverControl">The <see cref="IServerControl"/> to populate <see cref="restartRegistration"/> with</param>
-		/// <param name="asyncDelayer">The value of <see cref="asyncDelayer"/></param>
-		/// <param name="loggerFactory">The value of <see cref="loggerFactory"/></param>
-		/// <param name="logger">The value of <see cref="logger"/></param>
-		/// <param name="initialChatBots">The <see cref="IEnumerable{T}"/> used to populate <see cref="activeChatBots"/></param>
-		public ChatManager(IProviderFactory providerFactory, IIOManager ioManager, ICommandFactory commandFactory, IServerControl serverControl, IAsyncDelayer asyncDelayer, ILoggerFactory loggerFactory, ILogger<ChatManager> logger, IEnumerable<Models.ChatBot> initialChatBots)
+		/// <param name="providerFactory">The value of <see cref="providerFactory"/>.</param>
+		/// <param name="commandFactory">The value of <see cref="commandFactory"/>.</param>
+		/// <param name="serverControl">The <see cref="IServerControl"/> to populate <see cref="restartRegistration"/> with.</param>
+		/// <param name="loggerFactory">The value of <see cref="loggerFactory"/>.</param>
+		/// <param name="logger">The value of <see cref="logger"/>.</param>
+		/// <param name="initialChatBots">The <see cref="IEnumerable{T}"/> used to populate <see cref="activeChatBots"/>.</param>
+		public ChatManager(
+			IProviderFactory providerFactory,
+			ICommandFactory commandFactory,
+			IServerControl serverControl,
+			ILoggerFactory loggerFactory,
+			ILogger<ChatManager> logger,
+			IEnumerable<Models.ChatBot> initialChatBots)
 		{
 			this.providerFactory = providerFactory ?? throw new ArgumentNullException(nameof(providerFactory));
-			this.ioManager = ioManager ?? throw new ArgumentNullException(nameof(ioManager));
 			this.commandFactory = commandFactory ?? throw new ArgumentNullException(nameof(commandFactory));
-			if (serverControl == null)
-				throw new ArgumentNullException(nameof(serverControl));
-			this.asyncDelayer = asyncDelayer ?? throw new ArgumentNullException(nameof(asyncDelayer));
+			ArgumentNullException.ThrowIfNull(serverControl);
 			this.loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
 			this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
 			activeChatBots = initialChatBots?.ToList() ?? throw new ArgumentNullException(nameof(initialChatBots));
@@ -144,12 +165,15 @@ namespace Tgstation.Server.Host.Components.Chat
 
 			synchronizationLock = new object();
 
-			builtinCommands = new Dictionary<string, ICommand>();
+			builtinCommands = new Dictionary<string, ICommand>(StringComparer.OrdinalIgnoreCase);
 			providers = new Dictionary<long, IProvider>();
+			changeChannelSemaphores = new ConcurrentDictionary<long, SemaphoreSlim>();
 			mappedChannels = new Dictionary<ulong, ChannelMapping>();
 			trackingContexts = new List<IChatTrackingContext>();
 			handlerCts = new CancellationTokenSource();
-			connectionsUpdated = new TaskCompletionSource<object>();
+			connectionsUpdated = new TaskCompletionSource();
+
+			messageSendTask = Task.CompletedTask;
 			channelIdCounter = 1;
 		}
 
@@ -159,425 +183,147 @@ namespace Tgstation.Server.Host.Components.Chat
 			logger.LogTrace("Disposing...");
 			restartRegistration.Dispose();
 			handlerCts.Dispose();
-			foreach (var I in providers)
-				await I.Value.DisposeAsync().ConfigureAwait(false);
-		}
+			foreach (var providerKvp in providers)
+				await providerKvp.Value.DisposeAsync();
 
-		/// <summary>
-		/// Remove a <see cref="IProvider"/> from <see cref="providers"/> and <see cref="mappedChannels"/> optionally updating the <see cref="trackingContexts"/> as well
-		/// </summary>
-		/// <param name="connectionId">The <see cref="ChatBot.Id"/> of the <see cref="IProvider"/> to delete</param>
-		/// <param name="updateTrackings">If <see cref="trackingContexts"/> should be update</param>
-		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
-		/// <returns>A <see cref="Task{TResult}"/> resulting in the <see cref="IProvider"/> being removed if it exists, <see langword="null"/> otherwise.</returns>
-		async Task<IProvider> RemoveProvider(long connectionId, bool updateTrackings, CancellationToken cancellationToken)
-		{
-			logger.LogTrace("RemoveProvider {0}...", connectionId);
-			IProvider provider;
-			lock (providers)
-				if (!providers.TryGetValue(connectionId, out provider))
-				{
-					logger.LogTrace("Aborted, no such provider!");
-					return null;
-				}
+			foreach (var providerKvp in changeChannelSemaphores)
+				providerKvp.Value.Dispose();
 
-			Task trackingContextsUpdateTask;
-			lock (mappedChannels)
-			{
-				foreach (var I in mappedChannels.Where(x => x.Value.ProviderId == connectionId).Select(x => x.Key).ToList())
-					mappedChannels.Remove(I);
-
-				var newMappedChannels = mappedChannels.Select(y => y.Value.Channel).ToList();
-
-				if (updateTrackings)
-					lock (trackingContexts)
-						trackingContextsUpdateTask = Task.WhenAll(trackingContexts.Select(x => x.UpdateChannels(newMappedChannels, cancellationToken)));
-				else
-					trackingContextsUpdateTask = Task.CompletedTask;
-			}
-
-			await trackingContextsUpdateTask.ConfigureAwait(false);
-
-			return provider;
-		}
-
-		async Task RemapProvider(IProvider provider, CancellationToken cancellationToken)
-		{
-			logger.LogTrace("Remapping channels for provider reconnection...");
-			IEnumerable<Api.Models.ChatChannel> channelsToMap;
-			long providerId;
-			lock (providers)
-				providerId = providers.Where(x => x.Value == provider).Select(x => x.Key).First();
-
-			lock (activeChatBots)
-				channelsToMap = activeChatBots.FirstOrDefault(x => x.Id == providerId)?.Channels;
-
-			if (channelsToMap?.Any() ?? false)
-				await ChangeChannels(providerId, channelsToMap, cancellationToken).ConfigureAwait(false);
-		}
-
-		/// <summary>
-		/// Processes a <paramref name="message"/>
-		/// </summary>
-		/// <param name="provider">The <see cref="IProvider"/> who recevied <paramref name="message"/></param>
-		/// <param name="message">The <see cref="Message"/> to process. If <see langword="null"/>, this indicates the provider reconnected.</param>
-		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation</param>
-		/// <returns>A <see cref="Task"/> representing the running operation</returns>
-#pragma warning disable CA1502
-		async Task ProcessMessage(IProvider provider, Message message, CancellationToken cancellationToken)
-#pragma warning restore CA1502
-		{
-			if (!provider.Connected)
-			{
-				logger.LogTrace("Abort message processing because provider is disconnected!");
-				return;
-			}
-
-			// provider reconnected, remap channels.
-			if (message == null)
-			{
-				await RemapProvider(provider, cancellationToken).ConfigureAwait(false);
-				return;
-			}
-
-			// map the channel if it's private and we haven't seen it
-			lock (providers)
-			{
-				var providerId = providers.Where(x => x.Value == provider).Select(x => x.Key).First();
-				var enumerable = mappedChannels.Where(x => x.Value.ProviderId == providerId && x.Value.ProviderChannelId == message.User.Channel.RealId);
-				if (message.User.Channel.IsPrivateChannel)
-					lock (mappedChannels)
-						if (!enumerable.Any())
-						{
-							ulong newId;
-							lock (synchronizationLock)
-								newId = channelIdCounter++;
-							logger.LogTrace(
-								"Mapping private channel {0}:{1} as {2}",
-								message.User.Channel.ConnectionName,
-								message.User.FriendlyName,
-								newId);
-							mappedChannels.Add(newId, new ChannelMapping
-							{
-								IsWatchdogChannel = false,
-								ProviderChannelId = message.User.Channel.RealId,
-								ProviderId = providerId,
-								Channel = message.User.Channel
-							});
-							message.User.Channel.RealId = newId;
-						}
-						else
-							message.User.Channel.RealId = enumerable.First().Key;
-				else
-				{
-					// need to add tag and isAdminChannel
-					var mapping = enumerable.First().Value;
-					message.User.Channel.Id = mapping.Channel.Id;
-					message.User.Channel.Tag = mapping.Channel.Tag;
-					message.User.Channel.IsAdminChannel = mapping.Channel.IsAdminChannel;
-				}
-			}
-
-			var splits = new List<string>(message.Content.Trim().Split(' '));
-			var address = splits[0];
-			if (address.Length > 1 && (address.Last() == ':' || address.Last() == ','))
-				address = address[0..^1];
-
-			address = address.ToUpperInvariant();
-
-			var addressed =
-				address == CommonMention.ToUpperInvariant()
-				|| address == provider.BotMention.ToUpperInvariant();
-
-			// no mention
-			if (!addressed && !message.User.Channel.IsPrivateChannel)
-				return;
-
-			logger.LogTrace(
-				"Start processing command: {0}. User (True provider Id): {1}",
-				message.Content,
-				JsonConvert.SerializeObject(message.User));
-			try
-			{
-				if (addressed)
-					splits.RemoveAt(0);
-
-				if (splits.Count == 0)
-				{
-					// just a mention
-					await SendMessage("Hi!", new List<ulong> { message.User.Channel.RealId }, cancellationToken).ConfigureAwait(false);
-					return;
-				}
-
-				var command = splits[0].ToUpperInvariant();
-				splits.RemoveAt(0);
-				var arguments = String.Join(" ", splits);
-
-				ICommand GetCommand(string commandName)
-				{
-					if (!builtinCommands.TryGetValue(commandName, out var handler))
-					{
-						handler = trackingContexts
-							.Where(x => x.CustomCommands != null)
-							.SelectMany(x => x.CustomCommands)
-							.Where(x => x.Name.ToUpperInvariant() == commandName)
-							.FirstOrDefault();
-					}
-
-					return handler;
-				}
-
-				const string UnknownCommandMessage = "Unknown command! Type '?' or 'help' for available commands.";
-
-				if (command == "HELP" || command == "?")
-				{
-					string helpText;
-					if (splits.Count == 0)
-					{
-						var allCommands = builtinCommands.Select(x => x.Value).ToList();
-						allCommands.AddRange(
-							trackingContexts
-								.Where(x => x.CustomCommands != null)
-								.SelectMany(
-									x => x.CustomCommands));
-						helpText = String.Format(CultureInfo.InvariantCulture, "Available commands (Type '?' or 'help' and then a command name for more details): {0}", String.Join(", ", allCommands.Select(x => x.Name)));
-					}
-					else
-					{
-						var helpHandler = GetCommand(splits[0].ToUpperInvariant());
-						if (helpHandler != default)
-							helpText = String.Format(CultureInfo.InvariantCulture, "{0}: {1}{2}", helpHandler.Name, helpHandler.HelpText, helpHandler.AdminOnly ? " - May only be used in admin channels" : String.Empty);
-						else
-							helpText = UnknownCommandMessage;
-					}
-
-					await SendMessage(helpText, new List<ulong> { message.User.Channel.RealId }, cancellationToken).ConfigureAwait(false);
-					return;
-				}
-
-				var commandHandler = GetCommand(command);
-
-				if (commandHandler == default)
-				{
-					await SendMessage(UnknownCommandMessage, new List<ulong> { message.User.Channel.RealId }, cancellationToken).ConfigureAwait(false);
-					return;
-				}
-
-				if (commandHandler.AdminOnly && !message.User.Channel.IsAdminChannel)
-				{
-					await SendMessage("Use this command in an admin channel!", new List<ulong> { message.User.Channel.RealId }, cancellationToken).ConfigureAwait(false);
-					return;
-				}
-
-				var result = await commandHandler.Invoke(arguments, message.User, cancellationToken).ConfigureAwait(false);
-				if (result != null)
-					await SendMessage(result, new List<ulong> { message.User.Channel.RealId }, cancellationToken).ConfigureAwait(false);
-			}
-			catch (OperationCanceledException ex)
-			{
-				logger.LogTrace(ex, "Command processing canceled!");
-				throw;
-			}
-			catch (Exception e)
-			{
-				// error bc custom commands should reply about why it failed
-				logger.LogError(e, "Error processing chat command");
-				await SendMessage(
-					"TGS: Internal error processing command! Check server logs!",
-					new List<ulong> { message.User.Channel.RealId },
-					cancellationToken)
-					.ConfigureAwait(false);
-			}
-			finally
-			{
-				logger.LogTrace("Done processing command.");
-			}
-		}
-
-		/// <summary>
-		/// Monitors active providers for new <see cref="Message"/>s
-		/// </summary>
-		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation</param>
-		/// <returns>A <see cref="Task"/> representing the running operation</returns>
-		async Task MonitorMessages(CancellationToken cancellationToken)
-		{
-			logger.LogTrace("Starting processing loop...");
-			var messageTasks = new Dictionary<IProvider, Task<Message>>();
-			try
-			{
-				while (!cancellationToken.IsCancellationRequested)
-				{
-					// prune disconnected providers
-					foreach (var I in messageTasks.Where(x => !x.Key.Disposed).ToList())
-						messageTasks.Remove(I.Key);
-
-					// add new ones
-					Task updatedTask;
-					lock (synchronizationLock)
-						updatedTask = connectionsUpdated.Task;
-					lock (providers)
-						foreach (var I in providers)
-							if (!messageTasks.ContainsKey(I.Value))
-								messageTasks.Add(I.Value, I.Value.NextMessage(cancellationToken));
-
-					if (messageTasks.Count == 0)
-					{
-						await asyncDelayer.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
-						continue;
-					}
-
-					// wait for a message
-					await Task.WhenAny(updatedTask, Task.WhenAny(messageTasks.Select(x => x.Value))).ConfigureAwait(false);
-
-					// process completed ones
-					foreach (var I in messageTasks.Where(x => x.Value.IsCompleted).ToList())
-					{
-						var message = await I.Value.ConfigureAwait(false);
-						var messageNumber = Interlocked.Increment(ref messagesProcessed);
-						using (LogContext.PushProperty("ChatMessage", messageNumber))
-							await ProcessMessage(I.Key, message, cancellationToken).ConfigureAwait(false);
-						messageTasks.Remove(I.Key);
-					}
-				}
-			}
-			catch (OperationCanceledException ex)
-			{
-				logger.LogTrace(ex, "Message processing loop cancelled!");
-			}
-			catch (Exception e)
-			{
-				logger.LogError(e, "Message loop crashed!");
-			}
-
-			logger.LogTrace("Leaving message processing loop");
+			await messageSendTask;
 		}
 
 		/// <inheritdoc />
-		public async Task ChangeChannels(long connectionId, IEnumerable<Api.Models.ChatChannel> newChannels, CancellationToken cancellationToken)
+		public async ValueTask ChangeChannels(long connectionId, IEnumerable<Models.ChatChannel> newChannels, CancellationToken cancellationToken)
 		{
-			if (newChannels == null)
-				throw new ArgumentNullException(nameof(newChannels));
+			ArgumentNullException.ThrowIfNull(newChannels);
 
-			logger.LogTrace("ChangeChannels {0}...", connectionId);
-			var provider = await RemoveProvider(connectionId, false, cancellationToken).ConfigureAwait(false);
-			if (provider == null)
-				return;
-			var results = await provider.MapChannels(newChannels, cancellationToken).ConfigureAwait(false);
-			lock (activeChatBots)
+			logger.LogTrace("ChangeChannels {connectionId}...", connectionId);
+			var semaphore = changeChannelSemaphores.GetOrAdd(connectionId, _ =>
 			{
-				var botToUpdate = activeChatBots.FirstOrDefault(bot => bot.Id == connectionId);
-				if (botToUpdate != null)
-					botToUpdate.Channels = newChannels
-						.Select(apiModel => new Models.ChatChannel
-						{
-							DiscordChannelId = apiModel.DiscordChannelId,
-							IrcChannel = apiModel.IrcChannel,
-							IsAdminChannel = apiModel.IsAdminChannel,
-							IsUpdatesChannel = apiModel.IsUpdatesChannel,
-							IsWatchdogChannel = apiModel.IsWatchdogChannel,
-							Tag = apiModel.Tag
-						})
-						.ToList();
-			}
-
-			var mappings = Enumerable.Zip(newChannels, results, (x, y) => new ChannelMapping
-			{
-				IsWatchdogChannel = x.IsWatchdogChannel == true,
-				IsUpdatesChannel = x.IsUpdatesChannel == true,
-				IsAdminChannel = x.IsAdminChannel == true,
-				ProviderChannelId = y.RealId,
-				ProviderId = connectionId,
-				Channel = y
+				logger.LogTrace("Creating ChangeChannels semaphore for connection ID {connectionId}...", connectionId);
+				return new SemaphoreSlim(1);
 			});
-
-			ulong baseId;
-			lock (synchronizationLock)
+			using (await SemaphoreSlimContext.Lock(semaphore, cancellationToken))
 			{
-				baseId = channelIdCounter;
-				channelIdCounter += (ulong)results.Count;
-			}
+				var provider = await RemoveProviderChannels(connectionId, false, cancellationToken);
+				if (provider == null)
+					return;
 
-			Task trackingContextUpdateTask;
-			lock (mappedChannels)
-			{
-				lock (providers)
-					if (!providers.TryGetValue(connectionId, out IProvider verify) || verify != provider) // aborted again
-						return;
-				foreach (var I in mappings)
+				if (!provider.Connected)
 				{
-					var newId = baseId++;
-					logger.LogTrace("Mapping channel {0}:{1} as {2}", I.Channel.ConnectionName, I.Channel.FriendlyName, newId);
-					mappedChannels.Add(newId, I);
-					I.Channel.RealId = newId;
+					logger.LogDebug("Cannot map channels, provider {providerId} disconnected!", connectionId);
+					return;
 				}
 
-				lock (trackingContexts)
-					trackingContextUpdateTask = Task.WhenAll(
-						trackingContexts.Select(
-							x => x.UpdateChannels(
-								mappedChannels.Select(y => y.Value.Channel).ToList(),
-								cancellationToken)));
-			}
-
-			await trackingContextUpdateTask.ConfigureAwait(false);
-		}
-
-		/// <inheritdoc />
-		public async Task ChangeSettings(Models.ChatBot newSettings, CancellationToken cancellationToken)
-		{
-			if (newSettings == null)
-				throw new ArgumentNullException(nameof(newSettings));
-
-			logger.LogTrace("ChangeSettings...");
-			IProvider provider;
-
-			async Task DisconnectProvider(IProvider p)
-			{
+				var results = await provider.MapChannels(newChannels, cancellationToken);
 				try
 				{
-					await p.Disconnect(cancellationToken).ConfigureAwait(false);
+					lock (activeChatBots)
+					{
+						var botToUpdate = activeChatBots.FirstOrDefault(bot => bot.Id == connectionId);
+						if (botToUpdate != null)
+							botToUpdate.Channels = newChannels
+								.Select(apiModel => new Models.ChatChannel
+								{
+									DiscordChannelId = apiModel.DiscordChannelId,
+									IrcChannel = apiModel.IrcChannel,
+									IsAdminChannel = apiModel.IsAdminChannel,
+									IsUpdatesChannel = apiModel.IsUpdatesChannel,
+									IsSystemChannel = apiModel.IsSystemChannel,
+									IsWatchdogChannel = apiModel.IsWatchdogChannel,
+									Tag = apiModel.Tag,
+								})
+								.ToList();
+					}
+
+					var newMappings = results.SelectMany(
+						kvp => kvp.Value.Select(
+							channelRepresentation => new ChannelMapping(channelRepresentation)
+							{
+								IsWatchdogChannel = kvp.Key.IsWatchdogChannel == true,
+								IsUpdatesChannel = kvp.Key.IsUpdatesChannel == true,
+								IsAdminChannel = kvp.Key.IsAdminChannel == true,
+								IsSystemChannel = kvp.Key.IsSystemChannel == true,
+								ProviderChannelId = channelRepresentation.RealId,
+								ProviderId = connectionId,
+							}));
+
+					ulong baseId;
+					lock (synchronizationLock)
+					{
+						baseId = channelIdCounter;
+						channelIdCounter += (ulong)results.Count;
+					}
+
+					lock (mappedChannels)
+					{
+						lock (providers)
+							if (!providers.TryGetValue(connectionId, out var verify) || verify != provider) // aborted again
+								return;
+						foreach (var newMapping in newMappings)
+						{
+							var newId = baseId++;
+							logger.LogTrace("Mapping channel {connectionName}:{channelFriendlyName} as {newId}", newMapping.Channel.ConnectionName, newMapping.Channel.FriendlyName, newId);
+							mappedChannels.Add(newId, newMapping);
+							newMapping.Channel.RealId = newId;
+						}
+					}
+
+					// we only want to update contexts if everything at startup has connected once already
+					// otherwise we could send an incomplete channel set to the DMAPI, which will then spout all its queued messages into it instead of all relevant chatbots
+					// The watchdog can call this if it needs to after starting up
+					if (initialProviderConnectionsTask!.IsCompleted)
+						await UpdateTrackingContexts(cancellationToken);
 				}
 				finally
 				{
-					await p.DisposeAsync().ConfigureAwait(false);
+					provider.InitialMappingComplete();
 				}
 			}
+		}
+
+		/// <inheritdoc />
+		public async ValueTask ChangeSettings(Models.ChatBot newSettings, CancellationToken cancellationToken)
+		{
+			ArgumentNullException.ThrowIfNull(newSettings);
+
+			logger.LogTrace("ChangeSettings...");
 
 			Task disconnectTask;
+			IProvider? provider = null;
+			var newSettingsId = Models.ModelExtensions.Require(newSettings, x => x.Id);
+			var newSettingsEnabled = Models.ModelExtensions.Require(newSettings, x => x.Enabled);
 			lock (providers)
 			{
 				// raw settings changes forces a rebuild of the provider
-				if (providers.TryGetValue(newSettings.Id, out provider))
-				{
-					providers.Remove(newSettings.Id);
-					disconnectTask = DisconnectProvider(provider);
-				}
+				if (providers.ContainsKey(newSettingsId))
+					disconnectTask = DeleteConnection(newSettingsId, cancellationToken);
 				else
 					disconnectTask = Task.CompletedTask;
-				if (newSettings.Enabled.Value)
+				if (newSettingsEnabled)
 				{
-					provider = providerFactory.CreateProvider(newSettings);
-					providers.Add(newSettings.Id, provider);
+					provider = providerFactory.CreateProvider(newSettings, GetCommandNames);
+					providers.Add(newSettingsId, provider);
 				}
 			}
 
 			lock (mappedChannels)
-				foreach (var I in mappedChannels.Where(x => x.Value.ProviderId == newSettings.Id).Select(x => x.Key).ToList())
-					mappedChannels.Remove(I);
+				foreach (var oldMappedChannelId in mappedChannels.Where(x => x.Value.ProviderId == newSettingsId).Select(x => x.Key).ToList())
+					mappedChannels.Remove(oldMappedChannelId);
 
-			await disconnectTask.ConfigureAwait(false);
+			await disconnectTask;
 
 			lock (synchronizationLock)
 			{
 				// same thread shennanigans
 				var oldOne = connectionsUpdated;
-				connectionsUpdated = new TaskCompletionSource<object>();
-				oldOne.SetResult(null);
+				connectionsUpdated = new TaskCompletionSource();
+				oldOne.SetResult();
 			}
 
 			var reconnectionUpdateTask = provider?.SetReconnectInterval(
-				newSettings.ReconnectionInterval.Value,
-				newSettings.Enabled.Value)
+				Models.ModelExtensions.Require(newSettings, x => x.ReconnectionInterval),
+				newSettingsEnabled)
 				?? Task.CompletedTask;
 			lock (activeChatBots)
 			{
@@ -585,94 +331,64 @@ namespace Tgstation.Server.Host.Components.Chat
 				if (originalChatBot != null)
 					activeChatBots.Remove(originalChatBot);
 
-				activeChatBots.Add(new Models.ChatBot
+				activeChatBots.Add(new Models.ChatBot(newSettings.Channels)
 				{
 					Id = newSettings.Id,
 					ConnectionString = newSettings.ConnectionString,
 					Enabled = newSettings.Enabled,
 					Name = newSettings.Name,
 					ReconnectionInterval = newSettings.ReconnectionInterval,
-					Provider = newSettings.Provider
+					Provider = newSettings.Provider,
 				});
 			}
 
-			await reconnectionUpdateTask.ConfigureAwait(false);
+			await reconnectionUpdateTask;
 		}
 
 		/// <inheritdoc />
-		public Task SendMessage(string message, IEnumerable<ulong> channelIds, CancellationToken cancellationToken)
+		public void QueueMessage(MessageContent message, IEnumerable<ulong> channelIds)
 		{
-			if (message == null)
-				throw new ArgumentNullException(nameof(message));
-			if (channelIds == null)
-				throw new ArgumentNullException(nameof(channelIds));
+			ArgumentNullException.ThrowIfNull(message);
+			ArgumentNullException.ThrowIfNull(channelIds);
 
-			logger.LogTrace("Chat send \"{0}\" to channels: {1}", message, String.Join(", ", channelIds));
-
-			return Task.WhenAll(channelIds.Select(x =>
-			{
-				ChannelMapping channelMapping;
-				lock (mappedChannels)
-					if (!mappedChannels.TryGetValue(x, out channelMapping))
-						return Task.CompletedTask;
-				IProvider provider;
-				lock (providers)
-					if (!providers.TryGetValue(channelMapping.ProviderId, out provider))
-						return Task.CompletedTask;
-				return provider.SendMessage(channelMapping.ProviderChannelId, message, cancellationToken);
-			}));
+			QueueMessageInternal(message, () => channelIds, false);
 		}
 
 		/// <inheritdoc />
-		public Task SendWatchdogMessage(string message, bool adminOnly, CancellationToken cancellationToken)
-		{
-			List<ulong> wdChannels = null;
-			message = String.Format(CultureInfo.InvariantCulture, "WD: {0}", message);
-
-			// so it doesn't change while we're using it
-			lock (mappedChannels)
-			{
-				if (adminOnly)
-				{
-					wdChannels = mappedChannels.Where(x => x.Value.IsAdminChannel).Select(x => x.Key).ToList();
-					if (wdChannels.Count == 0)
-						adminOnly = false;
-				}
-
-				if (!adminOnly)
-					wdChannels = mappedChannels.Where(x => x.Value.IsWatchdogChannel).Select(x => x.Key).ToList();
-			}
-
-			return SendMessage(message, wdChannels, cancellationToken);
-		}
+		public void QueueWatchdogMessage(string message)
+			=> QueueMessageGeneric(mapping => mapping.IsWatchdogChannel, message, "WD");
 
 		/// <inheritdoc />
-		public async Task<Func<string, string, Task>> SendDeploymentMessage(
+		public void QueueRawDeploymentMessage(string message)
+			=> QueueMessageGeneric(mapping => mapping.IsUpdatesChannel, message, null);
+
+		/// <inheritdoc />
+		public Func<string?, string, Action<bool>> QueueDeploymentMessage(
 			Models.RevisionInformation revisionInformation,
-			Version byondVersion,
+			Models.RevisionInformation? previousRevisionInformation,
+			EngineVersion engineVersion,
 			DateTimeOffset? estimatedCompletionTime,
-			string gitHubOwner,
-			string gitHubRepo,
-			bool localCommitPushed,
-			CancellationToken cancellationToken)
+			string? gitHubOwner,
+			string? gitHubRepo,
+			bool localCommitPushed)
 		{
 			List<ulong> wdChannels;
 			lock (mappedChannels) // so it doesn't change while we're using it
 				wdChannels = mappedChannels.Where(x => x.Value.IsUpdatesChannel).Select(x => x.Key).ToList();
 
-			logger.LogTrace("Sending deployment message for RevisionInformation: {0}", revisionInformation.Id);
+			logger.LogTrace("Sending deployment message for RevisionInformation: {revisionInfoId}", revisionInformation.Id);
 
-			var callbacks = new List<Func<string, string, Task>>();
+			var callbacks = new List<Func<string?, string, ValueTask<Func<bool, ValueTask>>>>();
 
-			await Task.WhenAll(
+			var task = Task.WhenAll(
 				wdChannels.Select(
 					async x =>
 					{
-						ChannelMapping channelMapping;
+						ChannelMapping? channelMapping;
 						lock (mappedChannels)
 							if (!mappedChannels.TryGetValue(x, out channelMapping))
 								return;
-						IProvider provider;
+						IProvider? provider;
 						lock (providers)
 							if (!providers.TryGetValue(channelMapping.ProviderId, out provider))
 								return;
@@ -680,38 +396,75 @@ namespace Tgstation.Server.Host.Components.Chat
 						{
 							var callback = await provider.SendUpdateMessage(
 								revisionInformation,
-								byondVersion,
+								previousRevisionInformation,
+								engineVersion,
 								estimatedCompletionTime,
 								gitHubOwner,
 								gitHubRepo,
 								channelMapping.ProviderChannelId,
 								localCommitPushed,
-								cancellationToken)
-								.ConfigureAwait(false);
+								handlerCts.Token);
 
-							callbacks.Add(callback);
+							lock (callbacks)
+								callbacks.Add(callback);
 						}
 						catch (Exception ex)
 						{
 							logger.LogWarning(
 								ex,
-								"Error sending deploy message to provider {0}!",
+								"Error sending deploy message to provider {providerId}!",
 								channelMapping.ProviderId);
 						}
-					}))
-				.ConfigureAwait(false);
+					}));
 
-			return (errorMessage, dreamMakerOutput) => Task.WhenAll(callbacks.Select(x => x(errorMessage, dreamMakerOutput)));
+			AddMessageTask(task);
+
+			Task callbackTask;
+			Func<bool, Task>? finalUpdateAction = null;
+			async Task CallbackTask(string? errorMessage, string dreamMakerOutput)
+			{
+				await task;
+				var callbackResults = await ValueTaskExtensions.WhenAll(
+					callbacks.Select(
+						x => x(
+							errorMessage,
+							dreamMakerOutput)),
+					callbacks.Count);
+
+				finalUpdateAction = active => ValueTaskExtensions.WhenAll(callbackResults.Select(finalizerCallback => finalizerCallback(active))).AsTask();
+			}
+
+			async Task CompletionTask(bool active)
+			{
+				try
+				{
+					await callbackTask;
+				}
+				catch
+				{
+					// Handled in AddMessageTask
+					return;
+				}
+
+				AddMessageTask(finalUpdateAction!(active));
+			}
+
+			return (errorMessage, dreamMakerOutput) =>
+			{
+				callbackTask = CallbackTask(errorMessage, dreamMakerOutput);
+				AddMessageTask(callbackTask);
+				return active => AddMessageTask(CompletionTask(active));
+			};
 		}
 
 		/// <inheritdoc />
 		public async Task StartAsync(CancellationToken cancellationToken)
 		{
-			foreach (var I in commandFactory.GenerateCommands())
-				builtinCommands.Add(I.Name.ToUpperInvariant(), I);
+			foreach (var tgsCommand in commandFactory.GenerateCommands())
+				builtinCommands.Add(tgsCommand.Name.ToUpperInvariant(), tgsCommand);
 			var initialChatBots = activeChatBots.ToList();
-			await Task.WhenAll(initialChatBots.Select(x => ChangeSettings(x, cancellationToken))).ConfigureAwait(false);
-			await Task.WhenAll(initialChatBots.Select(x => ChangeChannels(x.Id, x.Channels, cancellationToken))).ConfigureAwait(false);
+			await ValueTaskExtensions.WhenAll(initialChatBots.Select(x => ChangeSettings(x, cancellationToken)));
+			initialProviderConnectionsTask = InitialConnection();
 			chatHandler = MonitorMessages(handlerCts.Token);
 		}
 
@@ -720,8 +473,9 @@ namespace Tgstation.Server.Host.Components.Chat
 		{
 			handlerCts.Cancel();
 			if (chatHandler != null)
-				await chatHandler.ConfigureAwait(false);
-			await Task.WhenAll(providers.Select(x => x.Value).Select(x => x.Disconnect(cancellationToken))).ConfigureAwait(false);
+				await chatHandler;
+			await Task.WhenAll(providers.Select(x => x.Key).Select(x => DeleteConnection(x, cancellationToken)));
+			await messageSendTask;
 		}
 
 		/// <inheritdoc />
@@ -730,7 +484,7 @@ namespace Tgstation.Server.Host.Components.Chat
 			if (customCommandHandler == null)
 				throw new InvalidOperationException("RegisterCommandHandler() hasn't been called!");
 
-			IChatTrackingContext context = null;
+			IChatTrackingContext context = null!;
 			lock (mappedChannels)
 				context = new ChatTrackingContext(
 					customCommandHandler,
@@ -749,6 +503,38 @@ namespace Tgstation.Server.Host.Components.Chat
 		}
 
 		/// <inheritdoc />
+		public async ValueTask UpdateTrackingContexts(CancellationToken cancellationToken)
+		{
+			var logMessageSent = 0;
+			async Task UpdateTrackingContext(IChatTrackingContext channelSink, IEnumerable<ChannelRepresentation> channels)
+			{
+				if (Interlocked.Exchange(ref logMessageSent, 1) == 0)
+
+				await channelSink.UpdateChannels(channels, cancellationToken);
+			}
+
+			var waitingForInitialConnection = !initialProviderConnectionsTask!.IsCompleted;
+			if (waitingForInitialConnection)
+			{
+				logger.LogTrace("Waiting for initial chat bot connections before updating tracking contexts...");
+				await initialProviderConnectionsTask.WaitAsync(cancellationToken);
+			}
+
+			List<Task> tasks;
+			lock (mappedChannels)
+				lock (trackingContexts)
+					tasks = trackingContexts.Select(x => UpdateTrackingContext(x, mappedChannels.Select(y => y.Value.Channel))).ToList();
+
+			if (waitingForInitialConnection)
+				if (tasks.Count > 0)
+					logger.LogTrace("Updating chat tracking contexts...");
+				else
+					logger.LogTrace("No chat tracking contexts to update");
+
+			await Task.WhenAll(tasks);
+		}
+
+		/// <inheritdoc />
 		public void RegisterCommandHandler(ICustomCommandHandler customCommandHandler)
 		{
 			if (this.customCommandHandler != null)
@@ -759,26 +545,612 @@ namespace Tgstation.Server.Host.Components.Chat
 		/// <inheritdoc />
 		public async Task DeleteConnection(long connectionId, CancellationToken cancellationToken)
 		{
-			var provider = await RemoveProvider(connectionId, true, cancellationToken).ConfigureAwait(false);
-			if (provider != null)
-				try
+			logger.LogTrace("DeleteConnection {connectionId}", connectionId);
+			var hasSemaphore = changeChannelSemaphores.TryRemove(connectionId, out var semaphore);
+			using (hasSemaphore
+				? semaphore
+				: null)
+			using (hasSemaphore
+				? await SemaphoreSlimContext.Lock(semaphore!, cancellationToken)
+				: null)
+			{
+				var provider = await RemoveProviderChannels(connectionId, true, cancellationToken);
+				if (provider != null)
 				{
-					await provider.Disconnect(cancellationToken).ConfigureAwait(false);
+					var startTime = DateTimeOffset.UtcNow;
+					try
+					{
+						await provider.Disconnect(cancellationToken);
+					}
+					catch (Exception ex)
+					{
+						logger.LogError(ex, "Error disconnecting connection {connectionId}!", connectionId);
+					}
+
+					await provider.DisposeAsync();
+					var duration = DateTimeOffset.UtcNow - startTime;
+					if (duration.TotalSeconds > 3)
+						logger.LogWarning("Disconnecting a {providerType} took {totalSeconds}s!", provider.GetType().Name, duration.TotalSeconds);
 				}
-				finally
-				{
-					await provider.DisposeAsync().ConfigureAwait(false);
-				}
+				else
+					logger.LogTrace("DeleteConnection: ID {connectionId} doesn't exist!", connectionId);
+			}
 		}
 
 		/// <inheritdoc />
-		public Task HandleRestart(Version updateVersion, CancellationToken cancellationToken)
+		public ValueTask HandleRestart(Version? updateVersion, bool handlerMayDelayShutdownWithExtremelyLongRunningTasks, CancellationToken cancellationToken)
 		{
-			var message = updateVersion == null ? "TGS: Restart requested..." : String.Format(CultureInfo.InvariantCulture, "TGS: Updating to version {0}...", updateVersion);
-			List<ulong> wdChannels;
+			var message = updateVersion == null
+				? $"TGS: {(handlerMayDelayShutdownWithExtremelyLongRunningTasks ? "Graceful shutdown" : "Going down")}..."
+				: $"TGS: Updating to version {updateVersion}...";
+			List<ulong> systemChannels;
 			lock (mappedChannels) // so it doesn't change while we're using it
-				wdChannels = mappedChannels.Select(x => x.Key).ToList();
-			return SendMessage(message, wdChannels, cancellationToken);
+				systemChannels = mappedChannels
+					.Where(x => x.Value.IsSystemChannel)
+					.Select(x => x.Key)
+					.ToList();
+
+			return SendMessage(
+				systemChannels,
+				null,
+				new MessageContent
+				{
+					Text = message,
+				},
+				cancellationToken);
+		}
+
+		/// <summary>
+		/// Gets the currently available chat command names.
+		/// </summary>
+		/// <returns>The command names.</returns>
+		IReadOnlyList<string> GetCommandNames()
+		{
+			var commands = new List<string> { HelpCommandName };
+			commands.AddRange(builtinCommands.Values.Select(command => command.Name));
+			lock (trackingContexts)
+				commands.AddRange(
+					trackingContexts
+						.Where(trackingContext => trackingContext.Active)
+						.SelectMany(trackingContext => trackingContext.CustomCommands.Select(command => command.Name)));
+
+			return commands
+				.Distinct(StringComparer.OrdinalIgnoreCase)
+				.OrderBy(command => command, StringComparer.OrdinalIgnoreCase)
+				.ToList();
+		}
+
+		/// <summary>
+		/// Remove a <see cref="IProvider"/> from <see cref="mappedChannels"/> optionally removing the provider itself from <see cref="providers"/> and updating the <see cref="trackingContexts"/> as well.
+		/// </summary>
+		/// <param name="connectionId">The <see cref="EntityId.Id"/> of the <see cref="IProvider"/> to delete.</param>
+		/// <param name="removeProvider">If the provider should be removed from <see cref="providers"/> and <see cref="trackingContexts"/> should be update.</param>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="ValueTask{TResult}"/> resulting in the <see cref="IProvider"/> being removed if it exists, <see langword="null"/> otherwise.</returns>
+		async ValueTask<IProvider?> RemoveProviderChannels(long connectionId, bool removeProvider, CancellationToken cancellationToken)
+		{
+			logger.LogTrace("RemoveProviderChannels {connectionId}...", connectionId);
+			IProvider? provider;
+			lock (providers)
+			{
+				if (!providers.TryGetValue(connectionId, out provider))
+				{
+					logger.LogTrace("Aborted, no such provider!");
+					return null;
+				}
+
+				if (removeProvider)
+					providers.Remove(connectionId);
+			}
+
+			ValueTask trackingContextsUpdateTask;
+			lock (mappedChannels)
+			{
+				foreach (var mappedConnectionChannel in mappedChannels.Where(x => x.Value.ProviderId == connectionId).Select(x => x.Key).ToList())
+					mappedChannels.Remove(mappedConnectionChannel);
+
+				var newMappedChannels = mappedChannels.Select(y => y.Value.Channel).ToList();
+
+				if (removeProvider)
+					lock (trackingContexts)
+						trackingContextsUpdateTask = ValueTaskExtensions.WhenAll(trackingContexts.Select(x => x.UpdateChannels(newMappedChannels, cancellationToken)));
+				else
+					trackingContextsUpdateTask = ValueTask.CompletedTask;
+			}
+
+			await trackingContextsUpdateTask;
+
+			return provider;
+		}
+
+		/// <summary>
+		/// Remap the channels for a given <paramref name="provider"/>.
+		/// </summary>
+		/// <param name="provider">The <see cref="IProvider"/> to remap channels for.</param>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="ValueTask"/> representing the running operation.</returns>
+		async ValueTask RemapProvider(IProvider provider, CancellationToken cancellationToken)
+		{
+			logger.LogTrace("Remapping channels for provider reconnection...");
+			IEnumerable<Models.ChatChannel>? channelsToMap;
+			long providerId;
+			lock (providers)
+				providerId = providers.Where(x => x.Value == provider).Select(x => x.Key).First();
+
+			lock (activeChatBots)
+				channelsToMap = activeChatBots.FirstOrDefault(x => x.Id == providerId)?.Channels;
+
+			if (channelsToMap?.Any() ?? false)
+				await ChangeChannels(providerId, channelsToMap, cancellationToken);
+		}
+
+		/// <summary>
+		/// Processes a <paramref name="message"/>.
+		/// </summary>
+		/// <param name="provider">The <see cref="IProvider"/> who recevied <paramref name="message"/>.</param>
+		/// <param name="message">The <see cref="Message"/> to process. If <see langword="null"/>, this indicates the provider reconnected.</param>
+		/// <param name="recursed">If we are called recursively after remapping the provider.</param>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="ValueTask"/> representing the running operation.</returns>
+#pragma warning disable CA1502
+		async ValueTask ProcessMessage(IProvider provider, Message? message, bool recursed, CancellationToken cancellationToken)
+#pragma warning restore CA1502
+		{
+			if (!provider.Connected)
+			{
+				logger.LogTrace("Abort message processing because provider is disconnected!");
+				return;
+			}
+
+			// provider reconnected, remap channels.
+			if (message == null)
+			{
+				await RemapProvider(provider, cancellationToken);
+				return;
+			}
+
+			// map the channel if it's private and we haven't seen it
+			var providerChannelId = message.User.Channel.RealId;
+			KeyValuePair<ulong, ChannelMapping>? mappedChannel;
+			long providerId;
+			bool hasChannelZero;
+			lock (providers)
+			{
+				// important, otherwise we could end up processing during shutdown
+				cancellationToken.ThrowIfCancellationRequested();
+
+				var providerIdNullable = providers
+					.Where(x => x.Value == provider)
+					.Select(x => (long?)x.Key)
+					.FirstOrDefault();
+
+				if (!providerIdNullable.HasValue)
+				{
+					// possible to have a message queued and then the provider immediately disconnects
+					logger.LogDebug("Unable to process command \"{command}\" due to provider disconnecting", message.Content);
+					return;
+				}
+
+				providerId = providerIdNullable.Value;
+				mappedChannel = mappedChannels
+					.Where(x => x.Value.ProviderId == providerId && x.Value.ProviderChannelId == providerChannelId)
+					.Select(x => (KeyValuePair<ulong, ChannelMapping>?)x)
+					.FirstOrDefault();
+				hasChannelZero = mappedChannels
+					.Where(x => x.Value.ProviderId == providerId && x.Value.ProviderChannelId == 0)
+					.Any();
+			}
+
+			if (!recursed && !mappedChannel.HasValue && !message.User.Channel.IsPrivateChannel && hasChannelZero)
+			{
+				logger.LogInformation("Receieved message from unmapped channel whose provider contains ID 0. Remapping...");
+				await RemapProvider(provider, cancellationToken);
+				logger.LogTrace("Resume processing original message...");
+				await ProcessMessage(provider, message, true, cancellationToken);
+				return;
+			}
+
+			ValueTask TextReply(string reply) => SendMessage(
+				new List<ulong>
+				{
+					message.User.Channel.RealId,
+				},
+				message,
+				new MessageContent
+				{
+					Text = reply,
+				},
+				cancellationToken);
+
+			if (message.User.Channel.IsPrivateChannel)
+				lock (mappedChannels)
+					if (!mappedChannel.HasValue)
+					{
+						ulong newId;
+						lock (synchronizationLock)
+							newId = channelIdCounter++;
+						logger.LogTrace(
+							"Mapping private channel {connectionName}:{channelFriendlyName} as {newId}",
+							message.User.Channel.ConnectionName,
+							message.User.FriendlyName,
+							newId);
+						mappedChannels.Add(newId, new ChannelMapping(message.User.Channel)
+						{
+							ProviderChannelId = message.User.Channel.RealId,
+							ProviderId = providerId,
+						});
+
+						logger.LogTrace(
+							"Mapping DM {connectionName}:{userId} ({userFriendlyName}) as {newId}",
+							message.User.Channel.ConnectionName,
+							message.User.RealId,
+							message.User.FriendlyName,
+							newId);
+						message.User.Channel.RealId = newId;
+					}
+					else
+						message.User.Channel.RealId = mappedChannel.Value.Key;
+			else
+			{
+				if (!mappedChannel.HasValue)
+				{
+					logger.LogError(
+						"Error mapping message: Provider ID: {providerId}, Channel Real ID: {realId}",
+						providerId,
+						message.User.Channel.RealId);
+					logger.LogTrace("message: {messageJson}", JsonConvert.SerializeObject(message));
+					lock (mappedChannels)
+						logger.LogTrace("mappedChannels: {mappedChannelsJson}", JsonConvert.SerializeObject(mappedChannels));
+					await TextReply("TGS: Processing error, check logs!");
+					return;
+				}
+
+				var mappingChannelRepresentation = mappedChannel.Value.Value.Channel;
+
+				message.User.Channel.RealId = mappingChannelRepresentation.RealId;
+				message.User.Channel.Tag = mappingChannelRepresentation.Tag;
+				message.User.Channel.IsAdminChannel = mappingChannelRepresentation.IsAdminChannel;
+			}
+
+			var trimmedMessage = message.Content.Trim();
+			if (trimmedMessage.Length == 0)
+				return;
+
+			var splits = new List<string>(trimmedMessage.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+			var address = splits[0];
+			if (address.Length > 1 && (address.Last() == ':' || address.Last() == ','))
+				address = address[0..^1];
+
+			var addressed =
+				address.Equals(CommonMention, StringComparison.OrdinalIgnoreCase)
+				|| address.Equals(provider.BotMention, StringComparison.OrdinalIgnoreCase);
+
+			// no mention
+			if (!addressed && !message.User.Channel.IsPrivateChannel)
+				return;
+
+			logger.LogTrace(
+				"Start processing command: {message}. User (True provider Id): {profiderId}",
+				message.Content,
+				JsonConvert.SerializeObject(message.User));
+			try
+			{
+				if (addressed)
+					splits.RemoveAt(0);
+
+				if (splits.Count == 0)
+				{
+					// just a mention
+					await TextReply("Hi!");
+					return;
+				}
+
+				var command = splits[0];
+				splits.RemoveAt(0);
+				var arguments = String.Join(" ", splits);
+
+				Tuple<ICommand, IChatTrackingContext?>? GetCommand(string command)
+				{
+					if (!builtinCommands.TryGetValue(command, out var handler))
+						return trackingContexts
+							.Where(trackingContext => trackingContext.Active)
+							.SelectMany(trackingContext => trackingContext.CustomCommands.Select(customCommand => Tuple.Create<ICommand, IChatTrackingContext?>(customCommand, trackingContext)))
+							.Where(tuple => tuple.Item1.Name.Equals(command, StringComparison.OrdinalIgnoreCase))
+							.FirstOrDefault();
+
+					return Tuple.Create<ICommand, IChatTrackingContext?>(handler, null);
+				}
+
+				const string UnknownCommandMessage = "TGS: Unknown command! Type '?' or 'help' for available commands.";
+
+				if (command.Equals(HelpCommandName, StringComparison.OrdinalIgnoreCase) || command == "?")
+				{
+					string helpText;
+					if (splits.Count == 0)
+					{
+						var allCommands = builtinCommands.Select(x => x.Value).ToList();
+						allCommands.AddRange(
+							trackingContexts
+								.SelectMany(
+									x => x.CustomCommands));
+						helpText = String.Format(CultureInfo.InvariantCulture, "Available commands (Type '?' or 'help' and then a command name for more details): {0}", String.Join(", ", allCommands.Select(x => x.Name)));
+					}
+					else
+					{
+						var helpTuple = GetCommand(splits[0]);
+						if (helpTuple != default)
+						{
+							var (helpHandler, _) = helpTuple;
+							helpText = String.Format(CultureInfo.InvariantCulture, "{0}: {1}{2}", helpHandler.Name, helpHandler.HelpText, helpHandler.AdminOnly ? " - May only be used in admin channels" : String.Empty);
+						}
+						else
+							helpText = UnknownCommandMessage;
+					}
+
+					await TextReply(helpText);
+					return;
+				}
+
+				var tuple = GetCommand(command);
+
+				if (tuple == default)
+				{
+					await TextReply(UnknownCommandMessage);
+					return;
+				}
+
+				var (commandHandler, trackingContext) = tuple;
+
+				if (trackingContext?.Active == false)
+				{
+					await TextReply("TGS: The server is rebooting, please try again later");
+					return;
+				}
+
+				if (commandHandler.AdminOnly && !message.User.Channel.IsAdminChannel)
+				{
+					await TextReply("TGS: Use this command in an admin channel!");
+					return;
+				}
+
+				var result = await commandHandler.Invoke(arguments, message.User, cancellationToken);
+				if (result != null)
+					await SendMessage(new List<ulong> { message.User.Channel.RealId }, message, result, cancellationToken);
+			}
+			catch (OperationCanceledException ex)
+			{
+				logger.LogTrace(ex, "Command processing canceled!");
+			}
+			catch (Exception e)
+			{
+				// error bc custom commands should reply about why it failed
+				logger.LogError(e, "Error processing chat command");
+				await TextReply("TGS: Internal error processing command! Check server logs!");
+			}
+			finally
+			{
+				logger.LogTrace("Done processing command.");
+			}
+		}
+
+		/// <summary>
+		/// Monitors active providers for new <see cref="Message"/>s.
+		/// </summary>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="Task"/> representing the running operation.</returns>
+		async Task MonitorMessages(CancellationToken cancellationToken)
+		{
+			logger.LogTrace("Starting processing loop...");
+			var messageTasks = new Dictionary<IProvider, Task<Message?>>();
+			ValueTask activeProcessingTask = ValueTask.CompletedTask;
+			try
+			{
+				Task? updatedTask = null;
+				while (!cancellationToken.IsCancellationRequested)
+				{
+					if (updatedTask?.IsCompleted != false)
+						lock (synchronizationLock)
+							updatedTask = connectionsUpdated.Task;
+
+					// prune disconnected providers
+					foreach (var disposedProviderMessageTaskKvp in messageTasks.Where(x => x.Key.Disposed).ToList())
+						messageTasks.Remove(disposedProviderMessageTaskKvp.Key);
+
+					// add new ones
+					lock (providers)
+						foreach (var providerKvp in providers)
+							if (!messageTasks.ContainsKey(providerKvp.Value))
+								messageTasks.Add(
+									providerKvp.Value,
+									providerKvp.Value.NextMessage(cancellationToken));
+
+					if (messageTasks.Count == 0)
+					{
+						logger.LogTrace("No providers active, pausing messsage monitoring...");
+						await updatedTask.WaitAsync(cancellationToken);
+						logger.LogTrace("Resuming message monitoring...");
+						continue;
+					}
+
+					// wait for a message
+					await Task.WhenAny(updatedTask, Task.WhenAny(messageTasks.Select(x => x.Value)));
+
+					// process completed ones
+					foreach (var completedMessageTaskKvp in messageTasks.Where(x => x.Value.IsCompleted).ToList())
+					{
+						var provider = completedMessageTaskKvp.Key;
+						messageTasks.Remove(provider);
+
+						if (provider.Disposed) // valid to receive one, but don't process it
+							continue;
+
+						var message = await completedMessageTaskKvp.Value;
+						var messageNumber = Interlocked.Increment(ref messagesProcessed);
+
+						async ValueTask WrapProcessMessage()
+						{
+							var localActiveProcessingTask = activeProcessingTask;
+							using (LogContext.PushProperty(SerilogContextHelper.ChatMessageIterationContextProperty, messageNumber))
+								try
+								{
+									await ProcessMessage(provider, message, false, cancellationToken);
+								}
+								catch (Exception ex)
+								{
+									logger.LogError(ex, "Error processing message {messageNumber}!", messageNumber);
+								}
+
+							await localActiveProcessingTask;
+						}
+
+						activeProcessingTask = WrapProcessMessage();
+					}
+				}
+			}
+			catch (OperationCanceledException ex)
+			{
+				logger.LogTrace(ex, "Message processing loop cancelled!");
+			}
+			catch (Exception e)
+			{
+				logger.LogError(e, "Message loop crashed!");
+			}
+			finally
+			{
+				await activeProcessingTask;
+			}
+
+			logger.LogTrace("Leaving message processing loop");
+		}
+
+		/// <summary>
+		/// Asynchronously send a given <paramref name="message"/> to a set of <paramref name="channelIds"/>.
+		/// </summary>
+		/// <param name="channelIds">The <see cref="Models.ChatChannel.Id"/>s of the <see cref="Models.ChatChannel"/>s to send to.</param>
+		/// <param name="replyTo">The <see cref="Message"/> to reply to.</param>
+		/// <param name="message">The <see cref="MessageContent"/> to send.</param>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="Task"/> representing the running operation.</returns>
+		ValueTask SendMessage(IEnumerable<ulong> channelIds, Message? replyTo, MessageContent message, CancellationToken cancellationToken)
+		{
+			var channelIdsList = channelIds.ToList();
+
+			logger.LogTrace(
+				"Chat send \"{message}\"{embed} to channels: [{channelIdsCommaSeperated}]",
+				message.Text,
+				message.Embed != null ? " (with embed)" : String.Empty,
+				String.Join(", ", channelIdsList));
+
+			if (channelIdsList.Count == 0)
+				return ValueTask.CompletedTask;
+
+			return ValueTaskExtensions.WhenAll(
+				channelIdsList.Select(x =>
+				{
+					ChannelMapping? channelMapping;
+					lock (mappedChannels)
+						if (!mappedChannels.TryGetValue(x, out channelMapping))
+							return ValueTask.CompletedTask;
+					IProvider? provider;
+					lock (providers)
+						if (!providers.TryGetValue(channelMapping.ProviderId, out provider))
+							return ValueTask.CompletedTask;
+					return provider.SendMessage(replyTo, message, channelMapping.ProviderChannelId, cancellationToken);
+				}));
+		}
+
+		/// <summary>
+		/// Aggregate all <see cref="IProvider.InitialConnectionJob"/>s into one <sse cref="Task"/>.
+		/// </summary>
+		/// <returns>A <see cref="Task"/> representing the running operation.</returns>
+		async Task InitialConnection()
+		{
+			await Task.WhenAll(providers.Select(x => x.Value.InitialConnectionJob));
+			logger.LogTrace("Initial provider connection task completed");
+		}
+
+		/// <summary>
+		/// Adds a given <paramref name="task"/> to <see cref="messageSendTask"/>.
+		/// </summary>
+		/// <param name="task">The <see cref="Task"/> to add.</param>
+		void AddMessageTask(Task task)
+		{
+			async Task Wrap(Task originalTask)
+			{
+				await originalTask;
+				try
+				{
+					await task;
+				}
+				catch (OperationCanceledException ex)
+				{
+					logger.LogDebug(ex, "Async chat message cancelled!");
+				}
+				catch (Exception ex)
+				{
+					logger.LogError(ex, "Error in asynchronous chat message!");
+				}
+			}
+
+			lock (handlerCts)
+				messageSendTask = Wrap(messageSendTask);
+		}
+
+		/// <summary>
+		/// Adds a given <paramref name="message"/> to the send queue.
+		/// </summary>
+		/// <param name="message">The <see cref="MessageContent"/> being sent.</param>
+		/// <param name="channelIdsFactory">A <see cref="Func{TResult}"/> to retrieve he <see cref="Models.ChatChannel.Id"/>s of the <see cref="Models.ChatChannel"/>s to send to.</param>
+		/// <param name="waitForConnections">If <see langword="true"/>, the message send will wait for <see cref="initialProviderConnectionsTask"/> to complete before running.</param>
+		void QueueMessageInternal(MessageContent message, Func<IEnumerable<ulong>> channelIdsFactory, bool waitForConnections)
+		{
+			async Task SendMessageTask()
+			{
+				var cancellationToken = handlerCts.Token;
+				if (waitForConnections)
+					await initialProviderConnectionsTask!.WaitAsync(cancellationToken);
+
+				await SendMessage(
+					channelIdsFactory(),
+					null,
+					message,
+					cancellationToken);
+			}
+
+			AddMessageTask(SendMessageTask());
+		}
+
+		/// <summary>
+		/// Queues a message to a selected set of <see cref="ChannelMapping"/>s.
+		/// </summary>
+		/// <param name="channelSelector">A <see cref="Predicate{T}"/> for selecting the <see cref="ChannelMapping"/>s to send to.</param>
+		/// <param name="message">The message to send.</param>
+		/// <param name="prefix">The optional prefix to the message to be sent.</param>
+		void QueueMessageGeneric(Predicate<ChannelMapping> channelSelector, string message, string? prefix)
+		{
+			ArgumentNullException.ThrowIfNull(message);
+
+			if (prefix != null)
+			{
+				message = $"{prefix}: {message}";
+			}
+
+			if (!initialProviderConnectionsTask!.IsCompleted)
+				logger.LogTrace("Waiting for initial provider connections before sending chat message...");
+
+			// Reimplementing QueueMessage
+			QueueMessageInternal(
+				new MessageContent
+				{
+					Text = message,
+				},
+				() =>
+				{
+					// so it doesn't change while we're using it
+					lock (mappedChannels)
+						return mappedChannels.Where(x => channelSelector(x.Value)).Select(x => x.Key).ToList();
+				},
+				true);
 		}
 	}
 }

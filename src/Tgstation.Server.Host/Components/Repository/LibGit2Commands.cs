@@ -1,6 +1,7 @@
-﻿using LibGit2Sharp;
-using System;
+﻿using System;
 using System.Collections.Generic;
+
+using LibGit2Sharp;
 
 namespace Tgstation.Server.Host.Components.Repository
 {
@@ -19,16 +20,11 @@ namespace Tgstation.Server.Host.Components.Repository
 			FetchOptions fetchOptions,
 			string logMessage)
 		{
-			if (libGit2Repo == null)
-				throw new ArgumentNullException(nameof(libGit2Repo));
+			ArgumentNullException.ThrowIfNull(libGit2Repo);
 
-			if (!(libGit2Repo is LibGit2Sharp.Repository concreteRepo))
-				throw new ArgumentException("libGit2Repo must be an instance of LibGit2Sharp.Repository!", nameof(libGit2Repo));
+			ArgumentNullException.ThrowIfNull(remote);
 
-			if (remote == null)
-				throw new ArgumentNullException(nameof(remote));
-
-			Commands.Fetch(concreteRepo, remote.Name, refSpecs, fetchOptions, logMessage);
+			Commands.Fetch((LibGit2Sharp.Repository)libGit2Repo, remote.Name, refSpecs, fetchOptions, logMessage);
 		}
 	}
 }

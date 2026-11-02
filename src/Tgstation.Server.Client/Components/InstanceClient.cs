@@ -1,4 +1,5 @@
 ﻿using System;
+
 using Tgstation.Server.Api.Models;
 
 namespace Tgstation.Server.Client.Components
@@ -10,7 +11,7 @@ namespace Tgstation.Server.Client.Components
 		public Instance Metadata { get; }
 
 		/// <inheritdoc />
-		public IByondClient Byond { get; }
+		public IEngineClient Engine { get; }
 
 		/// <inheritdoc />
 		public IRepositoryClient Repository { get; }
@@ -22,7 +23,7 @@ namespace Tgstation.Server.Client.Components
 		public IConfigurationClient Configuration { get; }
 
 		/// <inheritdoc />
-		public IInstanceUserClient Users { get; }
+		public IInstancePermissionSetClient PermissionSets { get; }
 
 		/// <inheritdoc />
 		public IChatBotsClient ChatBots { get; }
@@ -34,22 +35,24 @@ namespace Tgstation.Server.Client.Components
 		public IJobsClient Jobs { get; }
 
 		/// <summary>
-		/// Construct a <see cref="InstanceClient"/>
+		/// Initializes a new instance of the <see cref="InstanceClient"/> class.
 		/// </summary>
 		/// <param name="apiClient">The <see cref="IApiClient"/> used to construct component clients.</param>
-		/// <param name="instance">The value of <see cref="Metadata"/></param>
+		/// <param name="instance">The value of <see cref="Metadata"/>.</param>
 		public InstanceClient(IApiClient apiClient, Instance instance)
 		{
 			if (apiClient == null)
 				throw new ArgumentNullException(nameof(apiClient));
+			if (!instance.Id.HasValue)
+				throw new ArgumentException("Instance missing ID!", nameof(instance));
 
 			Metadata = instance ?? throw new ArgumentNullException(nameof(instance));
 
-			Byond = new ByondClient(apiClient, instance);
+			Engine = new EngineClient(apiClient, instance);
 			Repository = new RepositoryClient(apiClient, instance);
 			DreamDaemon = new DreamDaemonClient(apiClient, instance);
 			Configuration = new ConfigurationClient(apiClient, instance);
-			Users = new InstanceUserClient(apiClient, instance);
+			PermissionSets = new InstancePermissionSetClient(apiClient, instance);
 			ChatBots = new ChatBotsClient(apiClient, instance);
 			DreamMaker = new DreamMakerClient(apiClient, instance);
 			Jobs = new JobsClient(apiClient, instance);

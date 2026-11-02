@@ -1,10 +1,15 @@
-using Microsoft.Extensions.Logging;
-using System;
+﻿using System;
+using System.Collections.Generic;
 using System.Globalization;
+
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
 using Tgstation.Server.Api.Models;
-using Tgstation.Server.Host.Core;
+using Tgstation.Server.Host.Configuration;
 using Tgstation.Server.Host.Jobs;
 using Tgstation.Server.Host.System;
+using Tgstation.Server.Host.Utils;
 
 namespace Tgstation.Server.Host.Components.Chat.Providers
 {
@@ -12,12 +17,12 @@ namespace Tgstation.Server.Host.Components.Chat.Providers
 	sealed class ProviderFactory : IProviderFactory
 	{
 		/// <summary>
-		/// The <see cref="IAssemblyInformationProvider"/> for the <see cref="ProviderFactory"/>
+		/// The <see cref="IAssemblyInformationProvider"/> for the <see cref="ProviderFactory"/>.
 		/// </summary>
 		readonly IAssemblyInformationProvider assemblyInformationProvider;
 
 		/// <summary>
-		/// The <see cref="IAsyncDelayer"/> for the <see cref="ProviderFactory"/>
+		/// The <see cref="IAsyncDelayer"/> for the <see cref="ProviderFactory"/>.
 		/// </summary>
 		readonly IAsyncDelayer asyncDelayer;
 
@@ -27,47 +32,67 @@ namespace Tgstation.Server.Host.Components.Chat.Providers
 		readonly IJobManager jobManager;
 
 		/// <summary>
-		/// The <see cref="ILoggerFactory"/> for the <see cref="ProviderFactory"/>
+		/// The <see cref="ILoggerFactory"/> for the <see cref="ProviderFactory"/>.
 		/// </summary>
 		readonly ILoggerFactory loggerFactory;
 
 		/// <summary>
-		/// Construct a <see cref="ProviderFactory"/>
+		/// The <see cref="GeneralConfiguration"/> <see cref="IOptionsMonitor{TOptions}"/> for the <see cref="ProviderFactory"/>.
+		/// </summary>
+		readonly IOptionsMonitor<GeneralConfiguration> generalConfigurationOptions;
+
+		/// <summary>
+		/// The <see cref="FileLoggingConfiguration"/> <see cref="IOptionsMonitor{TOptions}"/> for the <see cref="ProviderFactory"/>.
+		/// </summary>
+		readonly IOptionsMonitor<FileLoggingConfiguration> loggingConfigurationOptions;
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="ProviderFactory"/> class.
 		/// </summary>
 		/// <param name="jobManager">The value of <see cref="jobManager"/>.</param>
-		/// <param name="assemblyInformationProvider">The value of <see cref="assemblyInformationProvider"/></param>
-		/// <param name="asyncDelayer">The value of <see cref="asyncDelayer"/></param>
-		/// <param name="loggerFactory">The value of <see cref="loggerFactory"/></param>
+		/// <param name="assemblyInformationProvider">The value of <see cref="assemblyInformationProvider"/>.</param>
+		/// <param name="asyncDelayer">The value of <see cref="asyncDelayer"/>.</param>
+		/// <param name="loggerFactory">The value of <see cref="loggerFactory"/>.</param>
+		/// <param name="generalConfigurationOptions">The value of <see cref="generalConfigurationOptions"/>.</param>
+		/// <param name="loggingConfigurationOptions">The value of <see cref="loggingConfigurationOptions"/>.</param>
 		public ProviderFactory(
 			IJobManager jobManager,
 			IAssemblyInformationProvider assemblyInformationProvider,
 			IAsyncDelayer asyncDelayer,
-			ILoggerFactory loggerFactory)
+			ILoggerFactory loggerFactory,
+			IOptionsMonitor<GeneralConfiguration> generalConfigurationOptions,
+			IOptionsMonitor<FileLoggingConfiguration> loggingConfigurationOptions)
 		{
 			this.jobManager = jobManager ?? throw new ArgumentNullException(nameof(jobManager));
 			this.loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
 			this.asyncDelayer = asyncDelayer ?? throw new ArgumentNullException(nameof(asyncDelayer));
 			this.assemblyInformationProvider = assemblyInformationProvider ?? throw new ArgumentNullException(nameof(assemblyInformationProvider));
+			this.generalConfigurationOptions = generalConfigurationOptions ?? throw new ArgumentNullException(nameof(generalConfigurationOptions));
+			this.loggingConfigurationOptions = loggingConfigurationOptions ?? throw new ArgumentNullException(nameof(loggingConfigurationOptions));
 		}
 
 		/// <inheritdoc />
-		public IProvider CreateProvider(Models.ChatBot settings)
+		public IProvider CreateProvider(Models.ChatBot settings, Func<IEnumerable<string>> commandNamesFactory)
 		{
-			if (settings == null)
-				throw new ArgumentNullException(nameof(settings));
+			ArgumentNullException.ThrowIfNull(settings);
+			ArgumentNullException.ThrowIfNull(commandNamesFactory);
 			return settings.Provider switch
 			{
 				ChatProvider.Irc => new IrcProvider(
 					jobManager,
-					assemblyInformationProvider,
 					asyncDelayer,
 					loggerFactory.CreateLogger<IrcProvider>(),
-					settings),
+					settings,
+					assemblyInformationProvider,
+					loggingConfigurationOptions),
 				ChatProvider.Discord => new DiscordProvider(
 					jobManager,
-					assemblyInformationProvider,
+					asyncDelayer,
 					loggerFactory.CreateLogger<DiscordProvider>(),
-					settings),
+					assemblyInformationProvider,
+					generalConfigurationOptions,
+					settings,
+					commandNamesFactory),
 				_ => throw new InvalidOperationException(String.Format(CultureInfo.InvariantCulture, "Invalid ChatProvider: {0}", settings.Provider)),
 			};
 		}

@@ -1,4 +1,5 @@
 ﻿using System;
+
 using Tgstation.Server.Host.Components.Deployment;
 using Tgstation.Server.Host.Components.Interop.Bridge;
 using Tgstation.Server.Host.Models;
@@ -7,19 +8,24 @@ using Tgstation.Server.Host.System;
 namespace Tgstation.Server.Host.Components.Session
 {
 	/// <summary>
-	/// Parameters necessary for duplicating a <see cref="ISessionController"/> session
+	/// Parameters necessary for duplicating a <see cref="ISessionController"/> session.
 	/// </summary>
 	public sealed class ReattachInformation : ReattachInformationBase
 	{
 		/// <summary>
-		/// The <see cref="IDmbProvider"/> used by DreamDaemon
+		/// The <see cref="IDmbProvider"/> used by DreamDaemon.
 		/// </summary>
 		public IDmbProvider Dmb { get; set; }
 
 		/// <summary>
+		/// The <see cref="IDmbProvider"/> initially used to launch DreamDaemon. Should be a different <see cref="IDmbProvider"/> than <see cref="Dmb"/>. Should not be set if persisting the initial <see cref="CompileJob"/> isn't necessary.
+		/// </summary>
+		public IDmbProvider? InitialDmb { get; set; }
+
+		/// <summary>
 		/// The <see cref="Interop.Bridge.RuntimeInformation"/> for the DMAPI.
 		/// </summary>
-		public RuntimeInformation RuntimeInformation { get; private set; }
+		public RuntimeInformation? RuntimeInformation { get; private set; }
 
 		/// <summary>
 		/// The <see cref="TimeSpan"/> which indicates when topic requests should timeout.
@@ -32,7 +38,28 @@ namespace Tgstation.Server.Host.Components.Session
 		readonly object runtimeInformationLock;
 
 		/// <summary>
-		/// Initializes a new isntance of the <see cref="ReattachInformation"/> <see langword="class"/>.
+		/// Initializes a new instance of the <see cref="ReattachInformation"/> class. For use with a given <paramref name="copy"/> and <paramref name="dmb"/>.
+		/// </summary>
+		/// <param name="copy">The <see cref="Models.ReattachInformation"/> to copy values from.</param>
+		/// <param name="dmb">The value of <see cref="Dmb"/>.</param>
+		/// <param name="initialDmb">The value of <see cref="InitialDmb"/>.</param>
+		/// <param name="topicRequestTimeout">The value of <see cref="TopicRequestTimeout"/>.</param>
+		public ReattachInformation(
+			Models.ReattachInformation copy,
+			IDmbProvider dmb,
+			IDmbProvider? initialDmb,
+			TimeSpan topicRequestTimeout)
+			: base(copy)
+		{
+			Dmb = dmb ?? throw new ArgumentNullException(nameof(dmb));
+			InitialDmb = initialDmb;
+			TopicRequestTimeout = topicRequestTimeout;
+
+			runtimeInformationLock = new object();
+		}
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="ReattachInformation"/> class.
 		/// </summary>
 		/// <param name="dmb">The value of <see cref="Dmb"/>.</param>
 		/// <param name="process">The <see cref="IProcess"/> used to get the <see cref="ReattachInformationBase.ProcessId"/>.</param>
@@ -45,34 +72,15 @@ namespace Tgstation.Server.Host.Components.Session
 			RuntimeInformation runtimeInformation,
 			string accessIdentifier,
 			ushort port)
+			: base(accessIdentifier)
 		{
 			Dmb = dmb ?? throw new ArgumentNullException(nameof(dmb));
 			ProcessId = process?.Id ?? throw new ArgumentNullException(nameof(process));
 			RuntimeInformation = runtimeInformation ?? throw new ArgumentNullException(nameof(runtimeInformation));
-			if (!runtimeInformation.SecurityLevel.HasValue)
-				throw new ArgumentException("runtimeInformation must have a valid SecurityLevel!", nameof(runtimeInformation));
 
-			AccessIdentifier = accessIdentifier ?? throw new ArgumentNullException(nameof(accessIdentifier));
-
-			LaunchSecurityLevel = runtimeInformation.SecurityLevel.Value;
+			LaunchSecurityLevel = runtimeInformation.SecurityLevel;
+			LaunchVisibility = runtimeInformation.Visibility;
 			Port = port;
-
-			runtimeInformationLock = new object();
-		}
-
-		/// <summary>
-		/// Construct a <see cref="ReattachInformation"/> from a given <paramref name="copy"/> and <paramref name="dmb"/>
-		/// </summary>
-		/// <param name="copy">The <see cref="Models.ReattachInformation"/> to copy values from</param>
-		/// <param name="dmb">The value of <see cref="Dmb"/></param>
-		/// <param name="topicRequestTimeout">The value of <see cref="TopicRequestTimeout"/>.</param>
-		public ReattachInformation(
-			Models.ReattachInformation copy,
-			IDmbProvider dmb,
-			TimeSpan topicRequestTimeout) : base(copy)
-		{
-			Dmb = dmb ?? throw new ArgumentNullException(nameof(dmb));
-			TopicRequestTimeout = topicRequestTimeout;
 
 			runtimeInformationLock = new object();
 		}
@@ -83,8 +91,7 @@ namespace Tgstation.Server.Host.Components.Session
 		/// <param name="runtimeInformation">The <see cref="Interop.Bridge.RuntimeInformation"/>.</param>
 		public void SetRuntimeInformation(RuntimeInformation runtimeInformation)
 		{
-			if (runtimeInformation == null)
-				throw new ArgumentNullException(nameof(runtimeInformation));
+			ArgumentNullException.ThrowIfNull(runtimeInformation);
 
 			lock (runtimeInformationLock)
 			{

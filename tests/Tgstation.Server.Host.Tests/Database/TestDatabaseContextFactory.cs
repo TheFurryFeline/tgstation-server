@@ -3,6 +3,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
 using System;
 using System.Threading.Tasks;
+
 using Tgstation.Server.Host.Models;
 
 namespace Tgstation.Server.Host.Database.Tests
@@ -13,14 +14,14 @@ namespace Tgstation.Server.Host.Database.Tests
 		[TestMethod]
 		public void TestConstructionThrows()
 		{
-			Assert.ThrowsException<ArgumentNullException>(() => new DatabaseContextFactory(null));
+			Assert.ThrowsExactly<ArgumentNullException>(() => new DatabaseContextFactory(null));
 			var mockProvider = new Mock<IServiceProvider>();
 			mockProvider.Setup(x => x.GetService(typeof(IDatabaseContext))).Verifiable();
 			var mockScope = new Mock<IServiceScope>();
 			mockScope.SetupGet(x => x.ServiceProvider).Returns(mockProvider.Object).Verifiable();
 			var mockScopeFactory = new Mock<IServiceScopeFactory>();
 			mockScopeFactory.Setup(x => x.CreateScope()).Returns(mockScope.Object).Verifiable();
-			Assert.ThrowsException<InvalidOperationException>(() => new DatabaseContextFactory(mockScopeFactory.Object));
+			Assert.ThrowsExactly<InvalidOperationException>(() => new DatabaseContextFactory(mockScopeFactory.Object));
 			mockScopeFactory.VerifyAll();
 			mockScope.VerifyAll();
 			mockProvider.VerifyAll();
@@ -40,12 +41,12 @@ namespace Tgstation.Server.Host.Database.Tests
 
 			var factory = new DatabaseContextFactory(mockScopeFactory.Object);
 
-			await Assert.ThrowsExceptionAsync<ArgumentNullException>(() => factory.UseContext(null)).ConfigureAwait(false);
+			await Assert.ThrowsExactlyAsync<ArgumentNullException>(() => factory.UseContext(null).AsTask());
 
 			await factory.UseContext(context =>
 			{
 				Assert.AreSame(mockDbo, context);
-				return Task.CompletedTask;
+				return ValueTask.CompletedTask;
 			});
 
 			mockScopeFactory.VerifyAll();

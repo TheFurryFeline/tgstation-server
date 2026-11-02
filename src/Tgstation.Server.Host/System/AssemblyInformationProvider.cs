@@ -1,6 +1,9 @@
 ﻿using System;
+using System.Net.Http.Headers;
 using System.Reflection;
-using Tgstation.Server.Api;
+
+using Tgstation.Server.Common;
+using Tgstation.Server.Common.Extensions;
 
 namespace Tgstation.Server.Host.System
 {
@@ -8,13 +11,13 @@ namespace Tgstation.Server.Host.System
 	sealed class AssemblyInformationProvider : IAssemblyInformationProvider
 	{
 		/// <inheritdoc />
-		public string VersionPrefix => "tgstation-server";
+		public string VersionPrefix => Constants.CanonicalPackageName;
 
 		/// <inheritdoc />
 		public Version Version { get; }
 
 		/// <inheritdoc />
-		public AssemblyName Name { get; }
+		public AssemblyName AssemblyName { get; }
 
 		/// <inheritdoc />
 		public string Path { get; }
@@ -22,16 +25,21 @@ namespace Tgstation.Server.Host.System
 		/// <inheritdoc />
 		public string VersionString { get; }
 
+		/// <inheritdoc />
+		public ProductInfoHeaderValue ProductInfoHeaderValue => new(
+			VersionPrefix,
+			Version.ToString());
+
 		/// <summary>
-		/// Initializes a new instance of the <see cref="AssemblyInformationProvider"/> <see langword="class"/>.
+		/// Initializes a new instance of the <see cref="AssemblyInformationProvider"/> class.
 		/// </summary>
 		public AssemblyInformationProvider()
 		{
 			Assembly assembly = Assembly.GetExecutingAssembly();
 			Path = assembly.Location;
-			Name = assembly.GetName();
-			Version = Name.Version.Semver();
-			VersionString = String.Concat(VersionPrefix, '-', Version);
+			AssemblyName = assembly.GetName();
+			Version = AssemblyName.Version!.Semver();
+			VersionString = String.Concat(VersionPrefix, "-v", Version);
 		}
 	}
 }

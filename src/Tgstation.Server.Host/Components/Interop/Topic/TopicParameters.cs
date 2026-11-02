@@ -1,4 +1,7 @@
 ﻿using System;
+
+using Newtonsoft.Json;
+
 using Tgstation.Server.Host.Components.Session;
 
 namespace Tgstation.Server.Host.Components.Interop.Topic
@@ -6,7 +9,7 @@ namespace Tgstation.Server.Host.Components.Interop.Topic
 	/// <summary>
 	/// Parameters for a topic request.
 	/// </summary>
-	sealed class TopicParameters : DMApiParameters
+	class TopicParameters : DMApiParameters
 	{
 		/// <summary>
 		/// The <see cref="TopicCommandType"/>.
@@ -17,12 +20,12 @@ namespace Tgstation.Server.Host.Components.Interop.Topic
 		/// <summary>
 		/// The <see cref="Topic.ChatCommand"/> for <see cref="TopicCommandType.ChatCommand"/> requests.
 		/// </summary>
-		public ChatCommand ChatCommand { get; }
+		public ChatCommand? ChatCommand { get; }
 
 		/// <summary>
 		/// The <see cref="Topic.EventNotification"/> for <see cref="TopicCommandType.EventNotification"/> requests.
 		/// </summary>
-		public EventNotification EventNotification { get; }
+		public EventNotification? EventNotification { get; }
 
 		/// <summary>
 		/// The new port for <see cref="TopicCommandType.ChangePort"/> or <see cref="TopicCommandType.ServerPortUpdate"/> requests.
@@ -35,31 +38,78 @@ namespace Tgstation.Server.Host.Components.Interop.Topic
 		public RebootState? NewRebootState { get; }
 
 		/// <summary>
-		/// The new <see cref="Api.Models.Instance.Name"/> for <see cref="TopicCommandType.InstanceRenamed"/> requests.
+		/// The new <see cref="Api.Models.NamedEntity.Name"/> for <see cref="TopicCommandType.InstanceRenamed"/> requests.
 		/// </summary>
-		public string NewInstanceName { get; }
+		public string? NewInstanceName { get; }
+
+		/// <summary>
+		/// The message to broadcast for <see cref="TopicCommandType.Broadcast"/> requests.
+		/// </summary>
+		public string? BroadcastMessage { get; }
 
 		/// <summary>
 		/// The <see cref="Interop.ChatUpdate"/> for <see cref="TopicCommandType.ChatChannelsUpdate"/> requests.
 		/// </summary>
-		public ChatUpdate ChatUpdate { get; }
+		public ChatUpdate? ChatUpdate { get; }
 
 		/// <summary>
 		/// The new server <see cref="Version"/> after a reattach.
 		/// </summary>
-		public Version NewServerVersion { get; }
+		public Version? NewServerVersion { get; }
 
 		/// <summary>
-		/// Initializes a new instance of the <see cref="TopicParameters"/> <see langword="class"/>.
+		/// The <see cref="ChunkData"/> for a partial request.
 		/// </summary>
-		/// <param name="commandType">The value of <see cref="CommandType"/>.</param>
-		private TopicParameters(TopicCommandType commandType)
-		{
-			CommandType = commandType;
-		}
+		public ChunkData? Chunk { get; }
 
 		/// <summary>
-		/// Initializes a new instance of the <see cref="TopicParameters"/> <see langword="class"/>.
+		/// The completed custom event ID.
+		/// </summary>
+		public string? EventId { get; set; }
+
+		/// <summary>
+		/// Whether or not the <see cref="TopicParameters"/> constitute a priority request.
+		/// </summary>
+		[JsonIgnore]
+		public bool IsPriority => CommandType switch
+		{
+			TopicCommandType.EventNotification
+			or TopicCommandType.ChangePort
+			or TopicCommandType.ChangeRebootState
+			or TopicCommandType.InstanceRenamed
+			or TopicCommandType.ChatChannelsUpdate
+			or TopicCommandType.Broadcast
+			or TopicCommandType.CompleteEvent
+			or TopicCommandType.ServerRestarted => true,
+			TopicCommandType.ChatCommand
+			or TopicCommandType.HealthCheck
+			or TopicCommandType.ReceiveChunk => false,
+			TopicCommandType.SendChunk => throw new InvalidOperationException("SendChunk topic priority should be based on the original TopicParameters!"),
+			_ => throw new InvalidOperationException($"Invalid value for {nameof(CommandType)}: {CommandType}"),
+		};
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="TopicParameters"/> class.
+		/// </summary>
+		/// <param name="newInstanceName">The value of <see cref="NewInstanceName"/>.</param>
+		/// <returns>The created <see cref="TopicParameters"/>.</returns>
+		public static TopicParameters CreateInstanceRenamedTopicParameters(string newInstanceName)
+			=> new(
+				newInstanceName ?? throw new ArgumentNullException(nameof(newInstanceName)),
+				TopicCommandType.InstanceRenamed);
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="TopicParameters"/> class.
+		/// </summary>
+		/// <param name="broadcastMessage">The value of <see cref="BroadcastMessage"/>.</param>
+		/// <returns>The created <see cref="TopicParameters"/>.</returns>
+		public static TopicParameters CreateBroadcastParameters(string broadcastMessage)
+			=> new(
+				broadcastMessage ?? throw new ArgumentNullException(nameof(broadcastMessage)),
+				TopicCommandType.Broadcast);
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="TopicParameters"/> class.
 		/// </summary>
 		/// <param name="chatCommand">The value of <see cref="ChatCommand"/>.</param>
 		public TopicParameters(ChatCommand chatCommand)
@@ -69,7 +119,7 @@ namespace Tgstation.Server.Host.Components.Interop.Topic
 		}
 
 		/// <summary>
-		/// Initializes a new instance of the <see cref="TopicParameters"/> <see langword="class"/>.
+		/// Initializes a new instance of the <see cref="TopicParameters"/> class.
 		/// </summary>
 		/// <param name="eventNotification">The value of <see cref="EventNotification"/>.</param>
 		public TopicParameters(EventNotification eventNotification)
@@ -79,7 +129,7 @@ namespace Tgstation.Server.Host.Components.Interop.Topic
 		}
 
 		/// <summary>
-		/// Initializes a new instance of the <see cref="TopicParameters"/> <see langword="class"/>.
+		/// Initializes a new instance of the <see cref="TopicParameters"/> class.
 		/// </summary>
 		/// <param name="newPort">The value of <see cref="NewPort"/>.</param>
 		public TopicParameters(ushort newPort)
@@ -89,7 +139,7 @@ namespace Tgstation.Server.Host.Components.Interop.Topic
 		}
 
 		/// <summary>
-		/// Initializes a new instance of the <see cref="TopicParameters"/> <see langword="class"/>.
+		/// Initializes a new instance of the <see cref="TopicParameters"/> class.
 		/// </summary>
 		/// <param name="newRebootState">The value of <see cref="NewRebootState"/>.</param>
 		public TopicParameters(RebootState newRebootState)
@@ -99,17 +149,7 @@ namespace Tgstation.Server.Host.Components.Interop.Topic
 		}
 
 		/// <summary>
-		/// Initializes a new instance of the <see cref="TopicParameters"/> <see langword="class"/>.
-		/// </summary>
-		/// <param name="newInstanceName">The value of <see cref="NewInstanceName"/>.</param>
-		public TopicParameters(string newInstanceName)
-			: this(TopicCommandType.InstanceRenamed)
-		{
-			NewInstanceName = newInstanceName ?? throw new ArgumentNullException(nameof(newInstanceName));
-		}
-
-		/// <summary>
-		/// Initializes a new instance of the <see cref="TopicParameters"/> <see langword="class"/>.
+		/// Initializes a new instance of the <see cref="TopicParameters"/> class.
 		/// </summary>
 		/// <param name="channelsUpdate">The value of <see cref="ChatUpdate"/>.</param>
 		public TopicParameters(ChatUpdate channelsUpdate)
@@ -119,7 +159,7 @@ namespace Tgstation.Server.Host.Components.Interop.Topic
 		}
 
 		/// <summary>
-		/// Initializes a new instance of the <see cref="TopicParameters"/> <see langword="class"/>.
+		/// Initializes a new instance of the <see cref="TopicParameters"/> class.
 		/// </summary>
 		/// <param name="newServerVersion">The value of <see cref="NewServerVersion"/>.</param>
 		/// <param name="serverPort">TGS's new API port.</param>
@@ -131,12 +171,65 @@ namespace Tgstation.Server.Host.Components.Interop.Topic
 		}
 
 		/// <summary>
-		/// Initializes a new instance of the <see cref="TopicParameters"/> <see langword="class"/>.
+		/// Initializes a new instance of the <see cref="TopicParameters"/> class.
 		/// </summary>
-		/// <remarks>Constructor for <see cref="TopicCommandType.Heartbeat"/>s.</remarks>
-		public TopicParameters()
-			: this(TopicCommandType.Heartbeat)
+		/// <param name="chunk">The value of <see cref="Chunk"/>.</param>
+		public TopicParameters(ChunkData chunk)
+			: this(TopicCommandType.SendChunk)
 		{
+			Chunk = chunk ?? throw new ArgumentNullException(nameof(chunk));
+		}
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="TopicParameters"/> class.
+		/// </summary>
+		/// <param name="eventId">The <see cref="Guid"/> containig the value of <see cref="EventId"/>.</param>
+		public TopicParameters(Guid eventId)
+			: this(TopicCommandType.CompleteEvent)
+		{
+			EventId = eventId.ToString();
+		}
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="TopicParameters"/> class.
+		/// </summary>
+		/// <remarks>Constructor for <see cref="TopicCommandType.HealthCheck"/>s.</remarks>
+		public TopicParameters()
+			: this(TopicCommandType.HealthCheck)
+		{
+		}
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="TopicParameters"/> class.
+		/// </summary>
+		/// <param name="commandType">The value of <see cref="CommandType"/>.</param>
+		protected TopicParameters(TopicCommandType commandType)
+			: base(String.Empty) // access identifier gets set before send
+		{
+			CommandType = commandType;
+		}
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="TopicParameters"/> class.
+		/// </summary>
+		/// <param name="stringCommand">The <see cref="string"/> parameter for the property designated by <paramref name="stringCommandType"/>.</param>
+		/// <param name="stringCommandType">The value of <see cref="CommandType"/>.</param>
+		TopicParameters(string stringCommand, TopicCommandType stringCommandType)
+			: this(stringCommandType)
+		{
+#pragma warning disable IDE0010 // Add missing cases
+			switch (stringCommandType)
+			{
+				case TopicCommandType.InstanceRenamed:
+					NewInstanceName = stringCommand;
+					break;
+				case TopicCommandType.Broadcast:
+					BroadcastMessage = stringCommand;
+					break;
+				default:
+					throw new InvalidOperationException($"Invalid string TopicCommandType: {stringCommandType}");
+			}
+#pragma warning restore IDE0010 // Add missing cases
 		}
 	}
 }

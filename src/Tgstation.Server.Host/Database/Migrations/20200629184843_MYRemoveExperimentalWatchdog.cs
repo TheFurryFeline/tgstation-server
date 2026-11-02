@@ -1,6 +1,7 @@
-﻿using Microsoft.EntityFrameworkCore.Metadata;
+﻿using System;
+
+using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Migrations;
-using System;
 
 namespace Tgstation.Server.Host.Database.Migrations
 {
@@ -12,8 +13,7 @@ namespace Tgstation.Server.Host.Database.Migrations
 		/// <inheritdoc />
 		protected override void Up(MigrationBuilder migrationBuilder)
 		{
-			if (migrationBuilder == null)
-				throw new ArgumentNullException(nameof(migrationBuilder));
+			ArgumentNullException.ThrowIfNull(migrationBuilder);
 
 			migrationBuilder.DropTable(
 				name: "WatchdogReattachInformations");
@@ -35,8 +35,7 @@ namespace Tgstation.Server.Host.Database.Migrations
 		/// <inheritdoc />
 		protected override void Down(MigrationBuilder migrationBuilder)
 		{
-			if (migrationBuilder == null)
-				throw new ArgumentNullException(nameof(migrationBuilder));
+			ArgumentNullException.ThrowIfNull(migrationBuilder);
 
 			migrationBuilder.RenameColumn(
 				name: "Port",
@@ -66,7 +65,7 @@ namespace Tgstation.Server.Host.Database.Migrations
 					AlphaId = table.Column<long>(type: "bigint", nullable: true),
 					AlphaIsActive = table.Column<bool>(type: "tinyint(1)", nullable: false),
 					BravoId = table.Column<long>(type: "bigint", nullable: true),
-					InstanceId = table.Column<long>(type: "bigint", nullable: false)
+					InstanceId = table.Column<long>(type: "bigint", nullable: false),
 				},
 				constraints: table =>
 				{

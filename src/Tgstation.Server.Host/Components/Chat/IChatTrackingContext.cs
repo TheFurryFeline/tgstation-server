@@ -1,17 +1,19 @@
 ﻿using System;
 using System.Collections.Generic;
+
 using Tgstation.Server.Host.Components.Chat.Commands;
 
 namespace Tgstation.Server.Host.Components.Chat
 {
 	/// <summary>
-	/// Represents a tracking of dynamic chat json files
+	/// Represents a tracking of dynamic chat json files.
 	/// </summary>
 	public interface IChatTrackingContext : IChannelSink, IDisposable
 	{
 		/// <summary>
 		/// If the <see cref="CustomCommands"/> should be used.
 		/// </summary>
+		/// <remarks>This should only be set by the <see cref="object"/> that sets the <see cref="CustomCommands"/>.</remarks>
 		bool Active { get; set; }
 
 		/// <summary>

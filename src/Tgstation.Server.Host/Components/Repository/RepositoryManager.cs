@@ -1,13 +1,19 @@
-using LibGit2Sharp;
-using Microsoft.Extensions.Logging;
-using System;
+﻿using System;
 using System.Threading;
 using System.Threading.Tasks;
+
+using LibGit2Sharp;
+
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
 using Tgstation.Server.Api.Models;
 using Tgstation.Server.Host.Components.Events;
-using Tgstation.Server.Host.Core;
+using Tgstation.Server.Host.Configuration;
+using Tgstation.Server.Host.Extensions;
 using Tgstation.Server.Host.IO;
 using Tgstation.Server.Host.Jobs;
+using Tgstation.Server.Host.Utils;
 
 namespace Tgstation.Server.Host.Components.Repository
 {
@@ -21,7 +27,7 @@ namespace Tgstation.Server.Host.Components.Repository
 		public bool CloneInProgress { get; private set; }
 
 		/// <summary>
-		/// The <see cref="ILibGit2RepositoryFactory"/> for the <see cref="RepositoryManager"/>
+		/// The <see cref="ILibGit2RepositoryFactory"/> for the <see cref="RepositoryManager"/>.
 		/// </summary>
 		readonly ILibGit2RepositoryFactory repositoryFactory;
 
@@ -31,44 +37,65 @@ namespace Tgstation.Server.Host.Components.Repository
 		readonly ILibGit2Commands commands;
 
 		/// <summary>
-		/// The <see cref="IIOManager"/> for the <see cref="RepositoryManager"/>
+		/// The <see cref="IIOManager"/> for the <see cref="RepositoryManager"/>.
 		/// </summary>
 		readonly IIOManager ioManager;
 
 		/// <summary>
-		/// The <see cref="IEventConsumer"/> for the <see cref="RepositoryManager"/>
+		/// The <see cref="IEventConsumer"/> for the <see cref="RepositoryManager"/>.
 		/// </summary>
 		readonly IEventConsumer eventConsumer;
 
 		/// <summary>
-		/// The <see cref="ILogger"/> created <see cref="Repository"/>s
+		/// The <see cref="IPostWriteHandler"/> for the <see cref="RepositoryManager"/>.
+		/// </summary>
+		readonly IPostWriteHandler postWriteHandler;
+
+		/// <summary>
+		/// The <see cref="IGitRemoteFeaturesFactory"/> for the <see cref="RepositoryManager"/>.
+		/// </summary>
+		readonly IGitRemoteFeaturesFactory gitRemoteFeaturesFactory;
+
+		/// <summary>
+		/// The <see cref="IOptionsMonitor{TOptions}"/> of <see cref="GeneralConfiguration"/> for the <see cref="RepositoryManager"/>.
+		/// </summary>
+		readonly IOptionsMonitor<GeneralConfiguration> generalConfigurationOptions;
+
+		/// <summary>
+		/// The <see cref="ILogger"/> created <see cref="Repository"/>s.
 		/// </summary>
 		readonly ILogger<Repository> repositoryLogger;
 
 		/// <summary>
-		/// The <see cref="ILogger"/> for the <see cref="RepositoryManager"/>
+		/// The <see cref="ILogger"/> for the <see cref="RepositoryManager"/>.
 		/// </summary>
 		readonly ILogger<RepositoryManager> logger;
 
 		/// <summary>
-		/// Used for controlling single access to the <see cref="IRepository"/>
+		/// Used for controlling single access to the <see cref="IRepository"/>.
 		/// </summary>
 		readonly SemaphoreSlim semaphore;
 
 		/// <summary>
-		/// Construct a <see cref="RepositoryManager"/>
+		/// Initializes a new instance of the <see cref="RepositoryManager"/> class.
 		/// </summary>
 		/// <param name="repositoryFactory">The value of <see cref="repositoryFactory"/>.</param>
 		/// <param name="commands">The value of <see cref="commands"/>.</param>
-		/// <param name="ioManager">The value of <see cref="ioManager"/></param>
-		/// <param name="eventConsumer">The value of <see cref="eventConsumer"/></param>
-		/// <param name="repositoryLogger">The value of <see cref="repositoryLogger"/></param>
-		/// <param name="logger">The value of <see cref="logger"/></param>
+		/// <param name="ioManager">The value of <see cref="ioManager"/>.</param>
+		/// <param name="eventConsumer">The value of <see cref="eventConsumer"/>.</param>
+		/// <param name="postWriteHandler">The value of <see cref="postWriteHandler"/>.</param>
+		/// <param name="gitRemoteFeaturesFactory">The value of <see cref="gitRemoteFeaturesFactory"/>.</param>
+		/// <param name="repositoryLogger">The value of <see cref="repositoryLogger"/>.</param>
+		/// <param name="generalConfigurationOptions">The value of <see cref="generalConfigurationOptions"/>.</param>
+		/// <param name="logger">The value of <see cref="logger"/>.</param>
 		public RepositoryManager(
 			ILibGit2RepositoryFactory repositoryFactory,
 			ILibGit2Commands commands,
 			IIOManager ioManager,
 			IEventConsumer eventConsumer,
+			IPostWriteHandler postWriteHandler,
+			IGitRemoteFeaturesFactory gitRemoteFeaturesFactory,
+			IOptionsMonitor<GeneralConfiguration> generalConfigurationOptions,
 			ILogger<Repository> repositoryLogger,
 			ILogger<RepositoryManager> logger)
 		{
@@ -76,7 +103,10 @@ namespace Tgstation.Server.Host.Components.Repository
 			this.commands = commands ?? throw new ArgumentNullException(nameof(commands));
 			this.ioManager = ioManager ?? throw new ArgumentNullException(nameof(ioManager));
 			this.eventConsumer = eventConsumer ?? throw new ArgumentNullException(nameof(eventConsumer));
+			this.postWriteHandler = postWriteHandler ?? throw new ArgumentNullException(nameof(postWriteHandler));
+			this.gitRemoteFeaturesFactory = gitRemoteFeaturesFactory ?? throw new ArgumentNullException(nameof(gitRemoteFeaturesFactory));
 			this.repositoryLogger = repositoryLogger ?? throw new ArgumentNullException(nameof(repositoryLogger));
+			this.generalConfigurationOptions = generalConfigurationOptions ?? throw new ArgumentNullException(nameof(generalConfigurationOptions));
 			this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
 			semaphore = new SemaphoreSlim(1);
 		}
@@ -89,21 +119,16 @@ namespace Tgstation.Server.Host.Components.Repository
 		}
 
 		/// <inheritdoc />
-		public async Task<IRepository> CloneRepository(
+		public async ValueTask<IRepository?> CloneRepository(
 			Uri url,
-			string initialBranch,
-			string username,
-			string password,
-			Action<int> progressReporter,
+			string? initialBranch,
+			string? username,
+			string? password,
+			JobProgressReporter progressReporter,
 			bool recurseSubmodules,
 			CancellationToken cancellationToken)
 		{
-			if (url == null)
-				throw new ArgumentNullException(nameof(url));
-			if (progressReporter == null)
-				throw new ArgumentNullException(nameof(progressReporter));
-
-			logger.LogInformation("Begin clone {0} (Branch: {1})", url, initialBranch);
+			ArgumentNullException.ThrowIfNull(url);
 			lock (semaphore)
 			{
 				if (CloneInProgress)
@@ -111,37 +136,48 @@ namespace Tgstation.Server.Host.Components.Repository
 				CloneInProgress = true;
 			}
 
+			var repositoryPath = ioManager.ResolvePath();
+			logger.LogInformation("Begin clone {url} to {path} (Branch: {initialBranch})", url, repositoryPath, initialBranch);
+
 			try
 			{
-				using (await SemaphoreSlimContext.Lock(semaphore, cancellationToken).ConfigureAwait(false))
+				using (await SemaphoreSlimContext.Lock(semaphore, cancellationToken))
 				{
-					logger.LogTrace("Semaphore acquired");
-					var repositoryPath = ioManager.ResolvePath();
-					if (!await ioManager.DirectoryExists(repositoryPath, cancellationToken).ConfigureAwait(false))
+					logger.LogTrace("Semaphore acquired for clone");
+					if (!await ioManager.DirectoryExists(repositoryPath, cancellationToken))
 						try
 						{
+							using var cloneProgressReporter = progressReporter.CreateSection(null, 0.75f);
+							using var checkoutProgressReporter = progressReporter.CreateSection(null, 0.25f);
 							var cloneOptions = new CloneOptions
 							{
-								OnProgress = (a) => !cancellationToken.IsCancellationRequested,
-								OnTransferProgress = (a) =>
-								{
-									var percentage = 100 * (((float)a.IndexedObjects + a.ReceivedObjects) / (a.TotalObjects * 2));
-									progressReporter((int)percentage);
-									return !cancellationToken.IsCancellationRequested;
-								},
 								RecurseSubmodules = recurseSubmodules,
-								OnUpdateTips = (a, b, c) => !cancellationToken.IsCancellationRequested,
-								RepositoryOperationStarting = (a) => !cancellationToken.IsCancellationRequested,
+								OnCheckoutProgress = (path, completed, remaining) =>
+								{
+									if (checkoutProgressReporter == null)
+										return;
+
+									var percentage = (double)completed / remaining;
+									checkoutProgressReporter.ReportProgress(percentage);
+								},
 								BranchName = initialBranch,
-								CredentialsProvider = repositoryFactory.GenerateCredentialsHandler(username, password)
 							};
+
+							cloneOptions.FetchOptions.Hydrate(
+								logger,
+								cloneProgressReporter,
+								await repositoryFactory.GenerateCredentialsHandler(
+									gitRemoteFeaturesFactory.CreateGitRemoteFeatures(url),
+									username,
+									password,
+									cancellationToken),
+								cancellationToken);
 
 							await repositoryFactory.Clone(
 								url,
 								cloneOptions,
 								repositoryPath,
-								cancellationToken)
-								.ConfigureAwait(false);
+								cancellationToken);
 						}
 						catch
 						{
@@ -150,11 +186,11 @@ namespace Tgstation.Server.Host.Components.Repository
 								logger.LogTrace("Deleting partially cloned repository...");
 
 								// DCT: Cancellation token is for job, operation must run regardless
-								await ioManager.DeleteDirectory(repositoryPath, default).ConfigureAwait(false);
+								await ioManager.DeleteDirectory(repositoryPath, CancellationToken.None);
 							}
-							catch (Exception e)
+							catch (Exception innerException)
 							{
-								logger.LogDebug(e, "Error deleting partially cloned repository!");
+								logger.LogError(innerException, "Error deleting partially cloned repository!");
 							}
 
 							throw;
@@ -165,44 +201,53 @@ namespace Tgstation.Server.Host.Components.Repository
 						return null;
 					}
 				}
-
-				logger.LogInformation("Clone complete!");
 			}
 			finally
 			{
+				logger.LogTrace("Semaphore released after clone");
 				CloneInProgress = false;
 			}
 
-			return await LoadRepository(cancellationToken).ConfigureAwait(false);
+			logger.LogInformation("Clone complete!");
+			return await LoadRepository(cancellationToken);
 		}
 
 		/// <inheritdoc />
-		public async Task<IRepository> LoadRepository(CancellationToken cancellationToken)
+		public async ValueTask<IRepository?> LoadRepository(CancellationToken cancellationToken)
 		{
 			logger.LogTrace("Begin LoadRepository...");
 			lock (semaphore)
 				if (CloneInProgress)
 					throw new JobException(ErrorCode.RepoCloning);
-			await semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+
 			try
 			{
+				await semaphore.WaitAsync(cancellationToken);
 				try
 				{
-					var libGitRepo = await repositoryFactory.CreateFromPath(ioManager.ResolvePath(), cancellationToken).ConfigureAwait(false);
+					logger.LogTrace("Semaphore acquired for load");
+					var libGit2Repo = await repositoryFactory.CreateFromPath(ioManager.ResolvePath(), cancellationToken);
+
 					return new Repository(
-						libGitRepo,
+						libGit2Repo,
 						commands,
 						ioManager,
 						eventConsumer,
 						repositoryFactory,
-						repositoryLogger, () =>
-					{
-						logger.LogTrace("Releasing semaphore due to Repository disposal...");
-						semaphore.Release();
-					});
+						postWriteHandler,
+						gitRemoteFeaturesFactory,
+						repositoryFactory,
+						generalConfigurationOptions,
+						repositoryLogger,
+						() =>
+						{
+							logger.LogTrace("Releasing semaphore due to Repository disposal...");
+							semaphore.Release();
+						});
 				}
 				catch
 				{
+					logger.LogTrace("Releasing semaphore as load failed");
 					semaphore.Release();
 					throw;
 				}
@@ -215,13 +260,20 @@ namespace Tgstation.Server.Host.Components.Repository
 		}
 
 		/// <inheritdoc />
-		public async Task DeleteRepository(CancellationToken cancellationToken)
+		public async ValueTask DeleteRepository(CancellationToken cancellationToken)
 		{
 			logger.LogInformation("Deleting repository...");
-			using (await SemaphoreSlimContext.Lock(semaphore, cancellationToken).ConfigureAwait(false))
+			try
 			{
-				logger.LogTrace("Semaphore acquired, deleting Repository directory...");
-				await ioManager.DeleteDirectory(ioManager.ResolvePath(), cancellationToken).ConfigureAwait(false);
+				using (await SemaphoreSlimContext.Lock(semaphore, cancellationToken))
+				{
+					logger.LogTrace("Semaphore acquired, deleting Repository directory...");
+					await ioManager.DeleteDirectory(ioManager.ResolvePath(), cancellationToken);
+				}
+			}
+			finally
+			{
+				logger.LogTrace("Semaphore released after delete attempt");
 			}
 		}
 	}

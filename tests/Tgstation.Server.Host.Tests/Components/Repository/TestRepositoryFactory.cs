@@ -1,10 +1,14 @@
-﻿using LibGit2Sharp;
+﻿using System;
+using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
+
+using LibGit2Sharp;
+
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+
 using Moq;
-using System;
-using System.IO;
-using System.Threading.Tasks;
 
 namespace Tgstation.Server.Host.Components.Repository.Tests
 {
@@ -14,21 +18,21 @@ namespace Tgstation.Server.Host.Components.Repository.Tests
 	[TestClass]
 	public sealed class TestRepositoryFactory
 	{
-		static ILibGit2RepositoryFactory CreateFactory() => new LibGit2RepositoryFactory(Mock.Of<ILogger<LibGit2RepositoryFactory>>());
+		static LibGit2RepositoryFactory CreateFactory() => new(Mock.Of<ILogger<LibGit2RepositoryFactory>>());
 
-		static Task<LibGit2Sharp.IRepository> TestRepoLoading(
+		static async Task<LibGit2Sharp.IRepository> TestRepoLoading(
 			string path,
 			ILibGit2RepositoryFactory repositoryFactory = null) =>
-			(repositoryFactory ?? CreateFactory())
-			.CreateFromPath(path, default);
+			(await (repositoryFactory ?? CreateFactory())
+			.CreateFromPath(path, default));
 
 		[TestMethod]
-		public void TestConstructionThrows() => Assert.ThrowsException<ArgumentNullException>(() => new LibGit2RepositoryFactory(null));
+		public void TestConstructionThrows() => Assert.ThrowsExactly<ArgumentNullException>(() => new LibGit2RepositoryFactory(null));
 
 		[TestMethod]
 		public void TestInMemoryRepoCreation()
 		{
-			new LibGit2RepositoryFactory(Mock.Of<ILogger<LibGit2RepositoryFactory>>()).CreateInMemory().Dispose();
+			new LibGit2RepositoryFactory(Mock.Of<ILogger<LibGit2RepositoryFactory>>()).CreateInMemory();
 		}
 
 		[TestMethod]
@@ -39,12 +43,11 @@ namespace Tgstation.Server.Host.Components.Repository.Tests
 			try
 			{
 				var factory = CreateFactory();
+				var cloneOpts = new CloneOptions();
+				cloneOpts.FetchOptions.CredentialsProvider = await factory.GenerateCredentialsHandler(Mock.Of<IGitRemoteFeatures>(), null, null, CancellationToken.None);
 				await factory.Clone(
 					new Uri("https://github.com/Cyberboss/Test"),
-					new CloneOptions
-					{
-						CredentialsProvider = factory.GenerateCredentialsHandler(null, null)
-					},
+					cloneOpts,
 					tempDir,
 					default);
 
@@ -67,7 +70,7 @@ namespace Tgstation.Server.Host.Components.Repository.Tests
 					}
 					catch (UnauthorizedAccessException)
 					{
-						await Task.Delay(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+						await Task.Delay(TimeSpan.FromSeconds(3));
 					}
 				}
 			}

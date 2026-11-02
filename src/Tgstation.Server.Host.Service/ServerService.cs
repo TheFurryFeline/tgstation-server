@@ -1,113 +1,117 @@
-﻿using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.EventLog;
-using System;
+﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
-using System.Globalization;
+using System.Runtime.Versioning;
 using System.ServiceProcess;
 using System.Threading;
-using System.Threading.Tasks;
+
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.EventLog;
+
+using Tgstation.Server.Common;
 using Tgstation.Server.Host.Watchdog;
 
 namespace Tgstation.Server.Host.Service
 {
 	/// <summary>
-	/// Represents a <see cref="IWatchdog"/> as a <see cref="ServiceBase"/>
+	/// Represents a <see cref="IWatchdog"/> as a <see cref="ServiceBase"/>.
 	/// </summary>
+	[SupportedOSPlatform("windows")]
 	sealed class ServerService : ServiceBase
 	{
 		/// <summary>
-		/// The canonical windows service name
+		/// The canonical windows service name.
 		/// </summary>
-		public const string Name = "tgstation-server-4";
+		public const string Name = Constants.CanonicalPackageName;
 
 		/// <summary>
-		/// The <see cref="IWatchdog"/> for the <see cref="ServerService"/>
+		/// The <see cref="IWatchdog"/> for the <see cref="ServerService"/>.
 		/// </summary>
-		readonly IWatchdog watchdog;
+		readonly IWatchdogFactory watchdogFactory;
 
 		/// <summary>
-		/// The <see cref="Task"/> recieved from <see cref="IWatchdog.RunAsync(bool, string[], CancellationToken)"/> of <see cref="watchdog"/>
+		/// The <see cref="Lazy{T}"/> <see cref="ILoggerFactory"/> used by the <see cref="ServerService"/>.
 		/// </summary>
-		Task watchdogTask;
+		readonly Lazy<ILoggerFactory> loggerFactory;
 
 		/// <summary>
-		/// The <see cref="cancellationTokenSource"/> for the <see cref="ServerService"/>
+		/// The <see cref="Array"/> of command line arguments the service was invoked with.
 		/// </summary>
-		CancellationTokenSource cancellationTokenSource;
+		readonly string[] commandLineArguments;
 
 		/// <summary>
-		/// Construct a <see cref="ServerService"/>
+		/// The active <see cref="ServiceLifetime"/>.
 		/// </summary>
-		/// <param name="watchdogFactory">The <see cref="IWatchdogFactory"/> to create <see cref="watchdog"/> with</param>
-		/// <param name="loggerFactory">The <see cref="ILoggerFactory"/> for <paramref name="watchdogFactory"/></param>
-		/// <param name="minumumLogLevel">The minimum <see cref="Microsoft.Extensions.Logging.LogLevel"/> to record in the event log</param>
-		public ServerService(IWatchdogFactory watchdogFactory, ILoggerFactory loggerFactory, LogLevel minumumLogLevel)
+#pragma warning disable CA2213 // Disposable fields should be disposed
+		volatile ServiceLifetime? serviceLifetime;
+#pragma warning restore CA2213 // Disposable fields should be disposed
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="ServerService"/> class.
+		/// </summary>
+		/// <param name="watchdogFactory">The value of <see cref="watchdogFactory"/>.</param>
+		/// <param name="commandLineArguments">The value of <see cref="commandLineArguments"/>.</param>
+		/// <param name="minimumLogLevel">The minimum <see cref="LogLevel"/> to record in the event log.</param>
+		public ServerService(IWatchdogFactory watchdogFactory, string[] commandLineArguments, LogLevel minimumLogLevel)
 		{
-			if (watchdogFactory == null)
-				throw new ArgumentNullException(nameof(watchdogFactory));
-			if (loggerFactory == null)
-				throw new ArgumentNullException(nameof(loggerFactory));
+			this.watchdogFactory = watchdogFactory ?? throw new ArgumentNullException(nameof(watchdogFactory));
+			this.commandLineArguments = commandLineArguments ?? throw new ArgumentNullException(nameof(commandLineArguments));
 
-#pragma warning disable CS0618 // Type or member is obsolete
-			loggerFactory.AddEventLog(new EventLogSettings
+			ServiceName = Name;
+			loggerFactory = new Lazy<ILoggerFactory>(() => LoggerFactory.Create(builder => builder.AddEventLog(new EventLogSettings
 			{
 				LogName = EventLog.Log,
 				MachineName = EventLog.MachineName,
 				SourceName = EventLog.Source,
-				Filter = (message, logLevel) => logLevel >= minumumLogLevel
-			});
-#pragma warning restore CS0618 // Type or member is obsolete
-
-			ServiceName = Name;
-			watchdog = watchdogFactory.CreateWatchdog(loggerFactory);
+				Filter = (message, logLevel) => logLevel >= minimumLogLevel,
+			})));
 		}
 
 		/// <summary>
-		/// Executes the <see cref="watchdog"/>, stopping the service if it exits
+		/// Executes the <see cref="ServerService"/>.
 		/// </summary>
-		/// <param name="args">The arguments for the <see cref="watchdog"/></param>
-		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation</param>
-		/// <returns>A <see cref="Task"/> representing the running operation</returns>
-		async Task RunWatchdog(string[] args, CancellationToken cancellationToken)
-		{
-			await watchdog.RunAsync(false, args, cancellationTokenSource.Token).ConfigureAwait(false);
-
-			void StopServiceAsync()
-			{
-				try
-				{
-					Task.Run(Stop, cancellationToken);
-				}
-				catch (OperationCanceledException) { }
-				catch (Exception e)
-				{
-					EventLog.WriteEntry(String.Format(CultureInfo.InvariantCulture, "Error stopping service! Exception: {0}", e));
-				}
-			}
-
-			StopServiceAsync();
-		}
+		public void Run() => Run(this);
 
 		/// <inheritdoc />
 		protected override void Dispose(bool disposing)
 		{
-			cancellationTokenSource?.Dispose();
+			if (disposing)
+			{
+				OnStop();
+
+				if (loggerFactory.IsValueCreated)
+					loggerFactory.Value.Dispose();
+			}
+
 			base.Dispose(disposing);
 		}
 
 		/// <inheritdoc />
+		protected override void OnCustomCommand(int command) => serviceLifetime!.HandleCustomCommand(command);
+
+		/// <inheritdoc />
 		protected override void OnStart(string[] args)
 		{
-			cancellationTokenSource?.Dispose();
-			cancellationTokenSource = new CancellationTokenSource();
-			watchdogTask = RunWatchdog(args, cancellationTokenSource.Token);
+			var newArgs = new List<string>(commandLineArguments.Length + args.Length + 1)
+			{
+				"--General:SetupWizardMode=Never",
+			};
+
+			newArgs.AddRange(commandLineArguments);
+			newArgs.AddRange(args);
+
+			serviceLifetime = new ServiceLifetime(
+				Stop,
+				signalChecker => watchdogFactory.CreateWatchdog(signalChecker, loggerFactory.Value),
+				loggerFactory.Value.CreateLogger<ServiceLifetime>(),
+				newArgs.ToArray());
 		}
 
 		/// <inheritdoc />
 		protected override void OnStop()
 		{
-			cancellationTokenSource.Cancel();
-			watchdogTask.GetAwaiter().GetResult();
+			var oldLifetime = Interlocked.Exchange(ref serviceLifetime, null);
+			oldLifetime?.DisposeAsync().GetAwaiter().GetResult();
 		}
 	}
 }

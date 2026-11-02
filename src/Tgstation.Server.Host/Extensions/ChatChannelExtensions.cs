@@ -1,12 +1,13 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using Tgstation.Server.Api.Models;
+
+using Tgstation.Server.Host.Models;
 
 namespace Tgstation.Server.Host.Extensions
 {
 	/// <summary>
-	/// Extensions for the <see cref="ChatChannel"/> <see langword="class"/>.
+	/// Extensions for the <see cref="ChatChannel"/> class.
 	/// </summary>
 	static class ChatChannelExtensions
 	{
@@ -22,7 +23,7 @@ namespace Tgstation.Server.Host.Extensions
 		/// </summary>
 		/// <param name="chatChannel">The <see cref="ChatChannel"/> to retrieve information from.</param>
 		/// <returns>The IRC channel key stored in the <paramref name="chatChannel"/> if it exists, <see langword="null"/> otherwise.</returns>
-		public static string GetIrcChannelKey(this ChatChannel chatChannel)
+		public static string? GetIrcChannelKey(this ChatChannel chatChannel)
 		{
 			var splits = GetIrcChannelSplits(chatChannel);
 			if (splits.Count < 2)
@@ -37,8 +38,7 @@ namespace Tgstation.Server.Host.Extensions
 		/// <returns>A <see cref="IReadOnlyCollection{T}"/> of the <paramref name="chatChannel"/>'s <see cref="ChatChannel.IrcChannel"/> <see cref="string"/> separated by the ':' <see cref="char"/>.</returns>
 		static IReadOnlyCollection<string> GetIrcChannelSplits(ChatChannel chatChannel)
 		{
-			if (chatChannel == null)
-				throw new ArgumentNullException(nameof(chatChannel));
+			ArgumentNullException.ThrowIfNull(chatChannel);
 
 			if (chatChannel.IrcChannel == null)
 				throw new ArgumentException("IrcChannel must be set!", nameof(chatChannel));

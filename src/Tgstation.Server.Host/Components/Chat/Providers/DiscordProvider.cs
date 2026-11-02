@@ -1,25 +1,51 @@
-using Discord;
-using Discord.WebSocket;
-using Microsoft.Extensions.Logging;
-using System;
+﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Drawing;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
+using OneOf;
+
+using Remora.Discord.API.Abstractions.Gateway.Commands;
+using Remora.Discord.API.Abstractions.Gateway.Events;
+using Remora.Discord.API.Abstractions.Objects;
+using Remora.Discord.API.Abstractions.Rest;
+using Remora.Discord.API.Abstractions.Results;
+using Remora.Discord.API.Objects;
+using Remora.Discord.Gateway;
+using Remora.Discord.Gateway.Extensions;
+using Remora.Rest.Core;
+using Remora.Rest.Results;
+using Remora.Results;
+
 using Tgstation.Server.Api.Models;
+using Tgstation.Server.Api.Models.Internal;
+using Tgstation.Server.Common.Extensions;
+using Tgstation.Server.Host.Components.Interop;
+using Tgstation.Server.Host.Configuration;
+using Tgstation.Server.Host.Extensions;
 using Tgstation.Server.Host.Jobs;
 using Tgstation.Server.Host.Models;
 using Tgstation.Server.Host.System;
+using Tgstation.Server.Host.Utils;
 
 namespace Tgstation.Server.Host.Components.Chat.Providers
 {
 	/// <summary>
-	/// <see cref="IProvider"/> for the Discord app
+	/// <see cref="IProvider"/> for the Discord app.
 	/// </summary>
-	sealed class DiscordProvider : Provider
+	#pragma warning disable CA1506
+	sealed class DiscordProvider : Provider, IDiscordResponders
 	{
 		/// <inheritdoc />
-		public override bool Connected => client.ConnectionState == ConnectionState.Connected;
+		public override bool Connected => gatewayTask?.IsCompleted == false;
 
 		/// <inheritdoc />
 		public override string BotMention
@@ -28,14 +54,135 @@ namespace Tgstation.Server.Host.Components.Chat.Providers
 			{
 				if (!Connected)
 					throw new InvalidOperationException("Provider not connected");
-				return NormalizeMentions(client.CurrentUser.Mention);
+				return NormalizeMentions($"<@{currentUserId}>");
 			}
 		}
 
 		/// <summary>
-		/// Gets the Discord bot token.
+		/// The description of the TGS slash command.
 		/// </summary>
-		string BotToken => ChatBot.ConnectionString;
+		const string SlashCommandDescription = "Run a TGS chat command.";
+
+		/// <summary>
+		/// The Discord slash command text option name.
+		/// </summary>
+		const string SlashCommandOptionName = "command";
+
+		/// <summary>
+		/// The Discord slash command arguments option name.
+		/// </summary>
+		const string SlashCommandArgumentsOptionName = "arguments";
+
+		/// <summary>
+		/// The maximum amount of Discord autocomplete choices.
+		/// </summary>
+		const int MaxAutocompleteChoices = 25;
+
+		/// <summary>
+		/// Normalizes a configured Discord slash command name.
+		/// </summary>
+		/// <param name="commandName">The configured command name.</param>
+		/// <returns>The normalized slash command name.</returns>
+		public static string NormalizeSlashCommandName(string? commandName)
+		{
+			var normalized = commandName?.Trim();
+			if (String.IsNullOrWhiteSpace(normalized))
+				return GeneralConfiguration.DefaultDiscordSlashCommandName;
+
+#pragma warning disable CA1308 // Discord slash command names must be lowercase.
+			normalized = normalized.ToLowerInvariant();
+#pragma warning restore CA1308
+
+			if (normalized.Length > 32 || normalized.Any(character => !Char.IsLetterOrDigit(character) && character is not '-' and not '_' and not '\''))
+				throw new ArgumentException("DiscordSlashCommandName must be 1-32 letters, numbers, '-', '_' or apostrophes without a leading '/'.", nameof(commandName));
+
+			return normalized;
+		}
+
+		/// <summary>
+		/// Checks if an application command is a registered TGS slash command that should be removed from a stale scope.
+		/// </summary>
+		/// <param name="command">The application command.</param>
+		/// <param name="configuredCommandName">The configured slash command name.</param>
+		/// <returns><see langword="true"/> if the command is stale.</returns>
+		public static bool IsTgsSlashCommand(IApplicationCommand command, string configuredCommandName)
+		{
+			ArgumentNullException.ThrowIfNull(command);
+			ArgumentNullException.ThrowIfNull(configuredCommandName);
+
+			return command.Type == ApplicationCommandType.ChatInput
+				&& !command.Name.Equals(configuredCommandName, StringComparison.OrdinalIgnoreCase)
+				&& String.Equals(command.Description, SlashCommandDescription, StringComparison.Ordinal);
+		}
+
+		/// <summary>
+		/// Builds the existing chat command text for a Discord slash command.
+		/// </summary>
+		/// <param name="commandName">The slash command name.</param>
+		/// <param name="arguments">The slash command arguments.</param>
+		/// <returns>The chat command text.</returns>
+		static string BuildSlashCommandMessageContent(string commandName, string? arguments = null)
+		{
+			var trimmedArguments = arguments?.Trim();
+			return String.IsNullOrWhiteSpace(trimmedArguments)
+				? $"{ChatManager.CommonMention} {commandName.Trim()}"
+				: $"{ChatManager.CommonMention} {commandName.Trim()} {trimmedArguments}";
+		}
+
+		/// <summary>
+		/// Checks if an application can request message content.
+		/// </summary>
+		/// <param name="applicationFlags">The <see cref="ApplicationFlags"/> to check.</param>
+		/// <returns><see langword="true"/> if the message content gateway intent is available.</returns>
+		static bool HasMessageContentIntent(ApplicationFlags applicationFlags)
+			=> applicationFlags.HasFlag(ApplicationFlags.GatewayMessageContent)
+				|| applicationFlags.HasFlag(ApplicationFlags.GatewayMessageContentLimited);
+
+		/// <summary>
+		/// Gets a string option from <paramref name="commandData"/>.
+		/// </summary>
+		/// <param name="commandData">The command data.</param>
+		/// <param name="optionName">The option name.</param>
+		/// <returns>The string option value, if any.</returns>
+		static string? GetStringOption(IApplicationCommandData commandData, string optionName)
+		{
+			var option = commandData.Options.HasValue
+				? commandData.Options.Value.FirstOrDefault(option => option.Name.Equals(optionName, StringComparison.Ordinal))
+				: null;
+
+			if (option == null || !option.Value.HasValue || !option.Value.Value.IsT0)
+				return null;
+
+			return option.Value.Value.AsT0;
+		}
+
+		/// <summary>
+		/// The <see cref="ChannelType"/>s supported by the <see cref="DiscordProvider"/> for mapping.
+		/// </summary>
+		static readonly ChannelType[] SupportedGuildChannelTypes =
+		[
+			ChannelType.GuildText,
+			ChannelType.GuildAnnouncement,
+			ChannelType.PrivateThread,
+			ChannelType.PublicThread,
+		];
+
+		/// <summary>
+		/// The Discord slash command options.
+		/// </summary>
+		static readonly IReadOnlyList<IApplicationCommandOption> SlashCommandOptions =
+		[
+			new ApplicationCommandOption(
+				ApplicationCommandOptionType.String,
+				SlashCommandOptionName,
+				"The TGS command name.",
+				IsRequired: true,
+				EnableAutocomplete: true),
+			new ApplicationCommandOption(
+				ApplicationCommandOptionType.String,
+				SlashCommandArgumentsOptionName,
+				"The TGS command arguments."),
+		];
 
 		/// <summary>
 		/// The <see cref="IAssemblyInformationProvider"/> for the <see cref="DiscordProvider"/>.
@@ -43,374 +190,1471 @@ namespace Tgstation.Server.Host.Components.Chat.Providers
 		readonly IAssemblyInformationProvider assemblyInformationProvider;
 
 		/// <summary>
-		/// The <see cref="DiscordSocketClient"/> for the <see cref="DiscordProvider"/>
+		/// The <see cref="GeneralConfiguration"/> <see cref="IOptionsMonitor{TOptions}"/> for the <see cref="DiscordProvider"/>.
 		/// </summary>
-		readonly DiscordSocketClient client;
+		readonly IOptionsMonitor<GeneralConfiguration> generalConfigurationOptions;
 
 		/// <summary>
-		/// <see cref="List{T}"/> of mapped <see cref="ITextChannel"/> <see cref="IEntity{TId}.Id"/>s
+		/// The <see cref="ServiceProvider"/> containing Discord services.
+		/// </summary>
+		readonly ServiceProvider serviceProvider;
+
+		/// <summary>
+		/// Gets the currently available chat command names.
+		/// </summary>
+		readonly Func<IEnumerable<string>> commandNamesFactory;
+
+		/// <summary>
+		/// <see cref="List{T}"/> of mapped channel <see cref="Snowflake"/>s.
 		/// </summary>
 		readonly List<ulong> mappedChannels;
 
 		/// <summary>
-		/// Normalize a discord mention string
+		/// Lock <see cref="object"/> used to sychronize connect/disconnect operations.
 		/// </summary>
-		/// <param name="fromDiscord">The mention <see cref="string"/> provided by the Discord library</param>
-		/// <returns>The normalized mention <see cref="string"/></returns>
-		static string NormalizeMentions(string fromDiscord) => fromDiscord.Replace("<!@", "<@", StringComparison.Ordinal);
+		readonly object connectDisconnectLock;
 
 		/// <summary>
-		/// Construct a <see cref="DiscordProvider"/>
+		/// If the tgstation-server logo is shown in deployment embeds.
+		/// </summary>
+		readonly bool deploymentBranding;
+
+		/// <summary>
+		/// The <see cref="DiscordDMOutputDisplayType"/>.
+		/// </summary>
+		readonly DiscordDMOutputDisplayType outputDisplayType;
+
+		/// <summary>
+		/// The Discord slash command name.
+		/// </summary>
+		readonly string slashCommandName;
+
+		/// <summary>
+		/// If Discord message contents are available.
+		/// </summary>
+		bool messageContentsAvailable;
+
+		/// <summary>
+		/// The <see cref="CancellationTokenSource"/> for the <see cref="gatewayTask"/>.
+		/// </summary>
+		CancellationTokenSource? gatewayCts;
+
+		/// <summary>
+		/// The <see cref="TaskCompletionSource"/> for the initial gateway connection event.
+		/// </summary>
+		TaskCompletionSource? gatewayReadyTcs;
+
+		/// <summary>
+		/// The <see cref="Task"/> representing the lifetime of the client.
+		/// </summary>
+		Task<Result>? gatewayTask;
+
+		/// <summary>
+		/// The bot's <see cref="Snowflake"/>.
+		/// </summary>
+		Snowflake currentUserId;
+
+		/// <summary>
+		/// If <see cref="serviceProvider"/> is being disposed.
+		/// </summary>
+		bool disposing;
+
+		/// <summary>
+		/// Normalize a discord mention string.
+		/// </summary>
+		/// <param name="fromDiscord">The mention <see cref="string"/> provided by the Discord library.</param>
+		/// <returns>The normalized mention <see cref="string"/>.</returns>
+		static string NormalizeMentions(string fromDiscord) => fromDiscord.Replace("<@!", "<@", StringComparison.Ordinal);
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="DiscordProvider"/> class.
 		/// </summary>
 		/// <param name="jobManager">The <see cref="IJobManager"/> for the <see cref="Provider"/>.</param>
-		/// <param name="assemblyInformationProvider">The value of <see cref="assemblyInformationProvider"/>.</param>
+		/// <param name="asyncDelayer">The <see cref="IAsyncDelayer"/> for the <see cref="Provider"/>.</param>
 		/// <param name="logger">The <see cref="ILogger"/> for the <see cref="Provider"/>.</param>
+		/// <param name="assemblyInformationProvider">The value of <see cref="assemblyInformationProvider"/>.</param>
+		/// <param name="generalConfigurationOptions">The value of <see cref="generalConfigurationOptions"/>.</param>
 		/// <param name="chatBot">The <see cref="ChatBot"/> for the <see cref="Provider"/>.</param>
+		/// <param name="commandNamesFactory">Gets the currently available chat command names.</param>
 		public DiscordProvider(
 			IJobManager jobManager,
-			IAssemblyInformationProvider assemblyInformationProvider,
+			IAsyncDelayer asyncDelayer,
 			ILogger<DiscordProvider> logger,
-			Models.ChatBot chatBot)
-			: base(jobManager, logger, chatBot)
+			IAssemblyInformationProvider assemblyInformationProvider,
+			IOptionsMonitor<GeneralConfiguration> generalConfigurationOptions,
+			ChatBot chatBot,
+			Func<IEnumerable<string>> commandNamesFactory)
+			: this(jobManager, asyncDelayer, logger, assemblyInformationProvider, generalConfigurationOptions, chatBot, commandNamesFactory, null)
+		{
+		}
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="DiscordProvider"/> class.
+		/// </summary>
+		/// <param name="jobManager">The <see cref="IJobManager"/> for the <see cref="Provider"/>.</param>
+		/// <param name="asyncDelayer">The <see cref="IAsyncDelayer"/> for the <see cref="Provider"/>.</param>
+		/// <param name="logger">The <see cref="ILogger"/> for the <see cref="Provider"/>.</param>
+		/// <param name="assemblyInformationProvider">The value of <see cref="assemblyInformationProvider"/>.</param>
+		/// <param name="generalConfigurationOptions">The value of <see cref="generalConfigurationOptions"/>.</param>
+		/// <param name="chatBot">The <see cref="ChatBot"/> for the <see cref="Provider"/>.</param>
+		/// <param name="commandNamesFactory">Gets the currently available chat command names.</param>
+		/// <param name="serviceProviderOverride">The optional service provider override for tests.</param>
+		public DiscordProvider(
+			IJobManager jobManager,
+			IAsyncDelayer asyncDelayer,
+			ILogger<DiscordProvider> logger,
+			IAssemblyInformationProvider assemblyInformationProvider,
+			IOptionsMonitor<GeneralConfiguration> generalConfigurationOptions,
+			ChatBot chatBot,
+			Func<IEnumerable<string>>? commandNamesFactory,
+			ServiceProvider? serviceProviderOverride)
+			: base(jobManager, asyncDelayer, logger, chatBot)
 		{
 			this.assemblyInformationProvider = assemblyInformationProvider ?? throw new ArgumentNullException(nameof(assemblyInformationProvider));
-			client = new DiscordSocketClient();
-			client.MessageReceived += Client_MessageReceived;
+			this.generalConfigurationOptions = generalConfigurationOptions ?? throw new ArgumentNullException(nameof(generalConfigurationOptions));
+			this.commandNamesFactory = commandNamesFactory ?? (() => Array.Empty<string>());
+			slashCommandName = NormalizeSlashCommandName(generalConfigurationOptions.CurrentValue?.DiscordSlashCommandName);
+			Logger.LogInformation("Discord slash command configured as /{slashCommandName}.", slashCommandName);
+
 			mappedChannels = new List<ulong>();
+			connectDisconnectLock = new object();
+
+			var csb = new DiscordConnectionStringBuilder(chatBot.ConnectionString!);
+			var botToken = csb.BotToken!;
+			outputDisplayType = csb.DMOutputDisplay;
+			deploymentBranding = csb.DeploymentBranding;
+
+			serviceProvider = serviceProviderOverride ?? new ServiceCollection()
+				.AddDiscordGateway(serviceProvider => botToken)
+				.AddSingleton(serviceProvider => (IDiscordResponders)this)
+				.AddResponder<DiscordForwardingResponder>()
+				.BuildServiceProvider();
 		}
 
 		/// <inheritdoc />
 		public override async ValueTask DisposeAsync()
 		{
-			await base.DisposeAsync().ConfigureAwait(false);
-			client.Dispose();
-		}
-
-		/// <summary>
-		/// Handle a message recieved from Discord
-		/// </summary>
-		/// <param name="e">The <see cref="SocketMessage"/></param>
-		/// <returns>A <see cref="Task"/> representing the running operation</returns>
-		async Task Client_MessageReceived(SocketMessage e)
-		{
-			if (e.Author.Id == client.CurrentUser.Id)
-				return;
-
-			var pm = e.Channel is IPrivateChannel;
-
-			if (!pm && !mappedChannels.Contains(e.Channel.Id))
+			lock (serviceProvider)
 			{
-				var mentionedUs = e.MentionedUsers.Any(x => x.Id == client.CurrentUser.Id);
-				if (mentionedUs)
-				{
-					Logger.LogTrace("Ignoring mention from {0} ({1}) by {2} ({3}). Channel not mapped!", e.Channel.Id, e.Channel.Name, e.Author.Id, e.Author.Username);
-
-					// DCT: None available
-					await SendMessage(e.Channel.Id, "I do not respond to this channel!", default).ConfigureAwait(false);
-				}
-
-				return;
+				// serviceProvider can recursively dispose us
+				if (disposing)
+					return;
+				disposing = true;
 			}
 
-			var result = new Message
-			{
-				Content = NormalizeMentions(e.Content),
-				User = new ChatUser
-				{
-					RealId = e.Author.Id,
-					Channel = new ChannelRepresentation
-					{
-						RealId = e.Channel.Id,
-						IsPrivateChannel = pm,
-						ConnectionName = pm ? e.Author.Username : (e.Channel as ITextChannel)?.Guild.Name ?? "UNKNOWN",
-						FriendlyName = e.Channel.Name
+			await base.DisposeAsync();
 
-						// isAdmin and Tag populated by manager
-					},
-					FriendlyName = e.Author.Username,
-					Mention = NormalizeMentions(e.Author.Mention)
-				}
-			};
+			await serviceProvider.DisposeAsync();
 
-			EnqueueMessage(result);
+			Logger.LogTrace("ServiceProvider disposed");
+
+			// this line is purely here to shutup CA2213. It should always be null
+			gatewayCts?.Dispose();
+
+			disposing = false;
 		}
 
 		/// <inheritdoc />
-		protected override async Task Connect(CancellationToken cancellationToken)
+		public override async ValueTask SendMessage(Message? replyTo, MessageContent message, ulong channelId, CancellationToken cancellationToken)
 		{
-			try
+			ArgumentNullException.ThrowIfNull(message);
+
+			Optional<IMessageReference> replyToReference = default;
+			Optional<IAllowedMentions> allowedMentions = default;
+			if (replyTo != null && replyTo is DiscordMessage discordMessage)
 			{
-				await client.LoginAsync(TokenType.Bot, BotToken, true).ConfigureAwait(false);
+				replyToReference = discordMessage.MessageReference;
+				allowedMentions = new AllowedMentions(
+					Parse: new List<MentionType> // reset settings back to how discord acts if this is not passed (which is different than the default if empty)
+					{
+						MentionType.Everyone,
+						MentionType.Roles,
+						MentionType.Users,
+					},
+					MentionRepliedUser: false); // disable reply mentions
+			}
 
-				Logger.LogTrace("Logged in.");
-				cancellationToken.ThrowIfCancellationRequested();
+			var embeds = ConvertEmbed(message.Embed);
 
-				await client.StartAsync().ConfigureAwait(false);
-
-				Logger.LogTrace("Started.");
-
-				var channelsAvailable = new TaskCompletionSource<object>();
-				Task ReadyCallback()
-				{
-					channelsAvailable.TrySetResult(null);
-					return Task.CompletedTask;
-				}
-
-				client.Ready += ReadyCallback;
+			if (replyTo is DiscordMessage { InteractionToken: { } interactionToken, ApplicationId: { } applicationId })
+			{
 				try
 				{
-					using (cancellationToken.Register(() => channelsAvailable.SetCanceled()))
-						await channelsAvailable.Task.ConfigureAwait(false);
-				}
-				finally
-				{
-					client.Ready -= ReadyCallback;
-				}
-			}
-			catch (OperationCanceledException)
-			{
-				throw;
-			}
-			catch (Exception e)
-			{
-				throw new JobException(ErrorCode.ChatCannotConnectProvider, e);
-			}
-		}
-
-		/// <inheritdoc />
-		protected override async Task DisconnectImpl(CancellationToken cancellationToken)
-		{
-			try
-			{
-				cancellationToken.ThrowIfCancellationRequested();
-				await client.StopAsync().ConfigureAwait(false);
-				Logger.LogTrace("Stopped.");
-				await client.LogoutAsync().ConfigureAwait(false);
-				Logger.LogDebug("Disconnected!");
-			}
-			catch (OperationCanceledException)
-			{
-				throw;
-			}
-			catch (Exception e)
-			{
-				Logger.LogWarning(e, "Error disconnecting from discord!");
-			}
-		}
-
-		/// <inheritdoc />
-		public override Task<IReadOnlyCollection<ChannelRepresentation>> MapChannels(IEnumerable<Api.Models.ChatChannel> channels, CancellationToken cancellationToken)
-		{
-			if (channels == null)
-				throw new ArgumentNullException(nameof(channels));
-
-			if (!Connected)
-			{
-				Logger.LogWarning("Cannot map channels, provider disconnected!");
-				return Task.FromResult<IReadOnlyCollection<ChannelRepresentation>>(Array.Empty<ChannelRepresentation>());
-			}
-
-			ChannelRepresentation GetModelChannelFromDBChannel(Api.Models.ChatChannel channelFromDB)
-			{
-				if (!channelFromDB.DiscordChannelId.HasValue)
-					throw new InvalidOperationException("ChatChannel missing DiscordChannelId!");
-
-				var channelId = channelFromDB.DiscordChannelId.Value;
-				var discordChannel = client.GetChannel(channelId);
-				if (discordChannel is ITextChannel textChannel)
-				{
-					var channelModel = new ChannelRepresentation
+					var interactionClient = serviceProvider.GetRequiredService<IDiscordRestInteractionAPI>();
+					Optional<IReadOnlyList<IEmbed>?> interactionEmbeds = embeds.HasValue
+						? new Optional<IReadOnlyList<IEmbed>?>(embeds.Value)
+						: default;
+					Optional<IAllowedMentions?> interactionAllowedMentions = allowedMentions.HasValue
+						? new Optional<IAllowedMentions?>(allowedMentions.Value)
+						: default;
+					var content = message.Text;
+					if (content == null)
 					{
-						RealId = discordChannel.Id,
-						IsAdminChannel = channelFromDB.IsAdminChannel == true,
-						ConnectionName = textChannel.Guild.Name,
-						FriendlyName = textChannel.Name,
-						IsPrivateChannel = false,
-						Tag = channelFromDB.Tag
-					};
-					Logger.LogTrace("Mapped channel {0}: {1}", channelModel.RealId, channelModel.FriendlyName);
-					return channelModel;
+						Logger.LogWarning(
+							"Failed to send interaction response to channel {channelId}: Message was null!",
+							channelId);
+
+						content = "TGS: Could not send message to Discord. Message was `null`!";
+					}
+
+					var response = await interactionClient.EditOriginalInteractionResponseAsync(
+						applicationId,
+						interactionToken,
+						content,
+						embeds: interactionEmbeds,
+						allowedMentions: interactionAllowedMentions,
+						ct: cancellationToken);
+
+					if (!response.IsSuccess)
+					{
+						Logger.LogWarning(
+							"Failed to send interaction response to channel {channelId}: {result}",
+							channelId,
+							response.LogFormat());
+
+						if (response.Error is RestResultError<RestError> restError && restError.Error.Code == DiscordError.InvalidFormBody)
+							await interactionClient.EditOriginalInteractionResponseAsync(
+								applicationId,
+								interactionToken,
+								"TGS: Could not send message to Discord. Body was malformed or too long",
+								ct: cancellationToken);
+					}
+				}
+				catch (Exception e) when (e is not OperationCanceledException)
+				{
+					Logger.LogWarning(
+						e,
+						"Error sending interaction response to channel {channelId}",
+						channelId);
 				}
 
-				Logger.LogWarning("Cound not map channel {0}! Incorrect type: {1}", channelId, discordChannel?.GetType());
-				return null;
+				return;
 			}
 
-			var enumerator = channels.Select(x => GetModelChannelFromDBChannel(x)).Where(x => x != null).ToList();
+			var channelsClient = serviceProvider.GetRequiredService<IDiscordRestChannelAPI>();
 
-			lock (client)
+			async ValueTask SendToChannel(Snowflake channelId)
 			{
-				mappedChannels.Clear();
-				mappedChannels.AddRange(enumerator.Select(x => x.RealId));
-			}
+				if (message.Text == null)
+				{
+					Logger.LogWarning(
+						"Failed to send to channel {channelId}: Message was null!",
+						channelId);
 
-			return Task.FromResult<IReadOnlyCollection<ChannelRepresentation>>(enumerator);
-		}
+					await channelsClient.CreateMessageAsync(
+						channelId,
+						"TGS: Could not send message to Discord. Message was `null`!",
+						messageReference: replyToReference,
+						allowedMentions: allowedMentions,
+						ct: cancellationToken);
 
-		/// <inheritdoc />
-		public override async Task SendMessage(ulong channelId, string message, CancellationToken cancellationToken)
-		{
-			try
-			{
-				if (!(client.GetChannel(channelId) is IMessageChannel channel))
 					return;
+				}
 
-				await channel.SendMessageAsync(
-					message,
-					false,
-					null,
-					new RequestOptions
-					{
-						CancelToken = cancellationToken,
-						Timeout = 10000 // prevent stupid long hold ups from this
-					})
-					.ConfigureAwait(false);
+				var result = await channelsClient.CreateMessageAsync(
+					channelId,
+					message.Text,
+					embeds: embeds,
+					messageReference: replyToReference,
+					allowedMentions: allowedMentions,
+					ct: cancellationToken);
+
+				if (!result.IsSuccess)
+				{
+					Logger.LogWarning(
+						"Failed to send to channel {channelId}: {result}",
+						channelId,
+						result.LogFormat());
+
+					if (result.Error is RestResultError<RestError> restError && restError.Error.Code == DiscordError.InvalidFormBody)
+						await channelsClient.CreateMessageAsync(
+							channelId,
+							"TGS: Could not send message to Discord. Body was malformed or too long",
+							messageReference: replyToReference,
+							allowedMentions: allowedMentions,
+							ct: cancellationToken);
+				}
 			}
-			catch (Exception e)
+
+			try
 			{
-				if (e is OperationCanceledException)
-					cancellationToken.ThrowIfCancellationRequested();
+				if (channelId == 0)
+				{
+					IEnumerable<IChannel> unmappedTextChannels;
+					var allAccessibleTextChannels = await GetAllAccessibleTextChannels(cancellationToken);
+					lock (mappedChannels)
+					{
+						unmappedTextChannels = allAccessibleTextChannels
+							.Where(x => !mappedChannels.Contains(x.ID.Value))
+							.ToList();
+
+						var remapRequired = unmappedTextChannels.Any()
+							|| mappedChannels.Any(
+								mappedChannel => !allAccessibleTextChannels.Any(
+									accessibleTextChannel => accessibleTextChannel.ID == new Snowflake(mappedChannel)));
+
+						if (remapRequired)
+							EnqueueMessage(null);
+					}
+
+					// discord API confirmed weak boned: https://stackoverflow.com/a/52462336
+					if (unmappedTextChannels.Any())
+					{
+						Logger.LogDebug("Dispatching to {count} unmapped channels...", unmappedTextChannels.Count());
+						await ValueTaskExtensions.WhenAll(
+							unmappedTextChannels.Select(
+								x => SendToChannel(x.ID)));
+					}
+
+					return;
+				}
+
+				await SendToChannel(new Snowflake(channelId));
+			}
+			catch (Exception e) when (e is not OperationCanceledException)
+			{
 				Logger.LogWarning(e, "Error sending discord message!");
 			}
 		}
 
 		/// <inheritdoc />
-		public override async Task<Func<string, string, Task>> SendUpdateMessage(
+		public override async ValueTask<Func<string?, string, ValueTask<Func<bool, ValueTask>>>> SendUpdateMessage(
 			Models.RevisionInformation revisionInformation,
-			Version byondVersion,
+			Models.RevisionInformation? previousRevisionInformation,
+			EngineVersion engineVersion,
 			DateTimeOffset? estimatedCompletionTime,
-			string gitHubOwner,
-			string gitHubRepo,
+			string? gitHubOwner,
+			string? gitHubRepo,
 			ulong channelId,
 			bool localCommitPushed,
 			CancellationToken cancellationToken)
 		{
-			bool gitHub = gitHubOwner != null && gitHubRepo != null;
+			ArgumentNullException.ThrowIfNull(revisionInformation);
+			ArgumentNullException.ThrowIfNull(engineVersion);
 
 			localCommitPushed |= revisionInformation.CommitSha == revisionInformation.OriginCommitSha;
 
-			var fields = new List<EmbedFieldBuilder>
+			var fields = BuildUpdateEmbedFields(revisionInformation, previousRevisionInformation, engineVersion, gitHubOwner, gitHubRepo, localCommitPushed);
+			Optional<IEmbedAuthor> author = new EmbedAuthor(assemblyInformationProvider.VersionPrefix)
 			{
-				new EmbedFieldBuilder
-				{
-					Name = "BYOND Version",
-					Value = $"{byondVersion.Major}.{byondVersion.Minor}{(byondVersion.Build > 0 ? $".{byondVersion.Build}" : String.Empty)}",
-					IsInline = true
-				},
-				new EmbedFieldBuilder
-				{
-					Name = "Local Commit",
-					Value = localCommitPushed && gitHub
-						? $"[{revisionInformation.CommitSha.Substring(0, 7)}](https://github.com/{gitHubOwner}/{gitHubRepo}/commit/{revisionInformation.CommitSha})"
-						: revisionInformation.CommitSha.Substring(0, 7),
-					IsInline = true
-				},
-				new EmbedFieldBuilder
-				{
-					Name = "Branch Commit",
-					Value = gitHub
-						? $"[{revisionInformation.OriginCommitSha.Substring(0, 7)}](https://github.com/{gitHubOwner}/{gitHubRepo}/commit/{revisionInformation.OriginCommitSha})"
-						: revisionInformation.OriginCommitSha.Substring(0, 7),
-					IsInline = true
-				}
+				Url = "https://github.com/tgstation/tgstation-server",
+				IconUrl = "https://cdn.discordapp.com/attachments/1114451486374637629/1151650846019432448/tgs.png", // 404's in browsers but works in Discord
 			};
-
-			fields.AddRange((revisionInformation.ActiveTestMerges ?? Enumerable.Empty<RevInfoTestMerge>())
-				.Select(x => x.TestMerge)
-				.Select(x => new EmbedFieldBuilder
-				{
-					Name = $"#{x.Number}",
-					Value = $"[{x.TitleAtMerge}]({x.Url}) by _[@{x.Author}](https://github.com/{x.Author})_{Environment.NewLine}Commit: [{x.PullRequestRevision.Substring(0, 7)}](https://github.com/{gitHubOwner}/{gitHubRepo}/commit/{x.PullRequestRevision}){(String.IsNullOrWhiteSpace(x.Comment) ? String.Empty : $"{Environment.NewLine}_**{x.Comment}**_")}"
-				}));
-
-			var builder = new EmbedBuilder
+			var embed = new Embed
 			{
-				Author = new EmbedAuthorBuilder
-				{
-					Name = assemblyInformationProvider.VersionPrefix,
-					Url = "https://github.com/tgstation/tgstation-server",
-					IconUrl = "https://avatars0.githubusercontent.com/u/1363778?s=280&v=4"
-				},
-				Color = Color.Gold,
+				Author = deploymentBranding ? author : default,
+				Colour = Color.FromArgb(0xF1, 0xC4, 0x0F),
 				Description = "TGS has begun deploying active repository code to production.",
 				Fields = fields,
 				Title = "Code Deployment",
-				Footer = new EmbedFooterBuilder
-				{
-					Text = $"In progress...{(estimatedCompletionTime.HasValue ? " ETA" : String.Empty)}"
-				},
-				Timestamp = estimatedCompletionTime
+				Footer = new EmbedFooter(
+					$"In progress...{(estimatedCompletionTime.HasValue ? " ETA" : String.Empty)}"),
+				Timestamp = estimatedCompletionTime ?? default,
 			};
 
-			Logger.LogTrace("Attempting to post deploy embed to channel {0}...", channelId);
-			if (!(client.GetChannel(channelId) is IMessageChannel channel))
-			{
-				Logger.LogTrace("Channel ID {0} does not exist or is not an IMessageChannel!", channelId);
-				return (errorMessage, dreamMakerOutput) => Task.CompletedTask;
-			}
+			Logger.LogTrace("Attempting to post deploy embed to channel {channelId}...", channelId);
+			var channelsClient = serviceProvider.GetRequiredService<IDiscordRestChannelAPI>();
 
-			var message = await channel.SendMessageAsync(
-				"DM: Deployment in Progress...",
-				false,
-				builder.Build(),
-				new RequestOptions
-				{
-					CancelToken = cancellationToken
-				})
-				.ConfigureAwait(false);
+			var prefix = GetEngineCompilerPrefix(engineVersion.Engine!.Value);
+			var messageResponse = await channelsClient.CreateMessageAsync(
+				new Snowflake(channelId),
+				$"{prefix}: Deployment in progress...",
+				embeds: new List<IEmbed> { embed },
+				ct: cancellationToken);
+
+			if (!messageResponse.IsSuccess)
+				Logger.LogWarning("Failed to post deploy embed to channel {channelId}: {result}", channelId, messageResponse.LogFormat());
 
 			return async (errorMessage, dreamMakerOutput) =>
 			{
-				var completionString = errorMessage == null ? "Succeeded" : "Failed";
-				builder.Footer.Text = completionString;
-				builder.Color = errorMessage == null ? Color.Green : Color.Red;
-				builder.Timestamp = DateTimeOffset.Now;
-				builder.Description = errorMessage == null
-					? "The deployment completed successfully and will be available at the next server reboot."
-					: "The deployment failed.";
+				var completionString = errorMessage == null ? "Pending" : "Failed";
+
+				Embed CreateUpdatedEmbed(string message, Color color) => new()
+				{
+					Author = embed.Author,
+					Colour = color,
+					Description = message,
+					Fields = fields,
+					Title = embed.Title,
+					Footer = new EmbedFooter(
+						completionString),
+					Timestamp = DateTimeOffset.UtcNow,
+				};
+
+				if (errorMessage == null)
+					embed = CreateUpdatedEmbed(
+						"The deployment completed successfully and will be available at the next server reboot.",
+						Color.Blue);
+				else
+					embed = CreateUpdatedEmbed(
+						"The deployment failed.",
+						Color.Red);
+
+				var showDMOutput = outputDisplayType switch
+				{
+					DiscordDMOutputDisplayType.Always => true,
+					DiscordDMOutputDisplayType.Never => false,
+					DiscordDMOutputDisplayType.OnError => errorMessage != null,
+					_ => throw new InvalidOperationException($"Invalid DiscordDMOutputDisplayType: {outputDisplayType}"),
+				};
 
 				if (dreamMakerOutput != null)
-					builder.AddField(new EmbedFieldBuilder
-					{
-						Name = "DreamMaker Output",
-						Value = $"```{Environment.NewLine}{dreamMakerOutput}{Environment.NewLine}```"
-					});
+				{
+					// https://github.com/discord-net/Discord.Net/blob/8349cd7e1eb92e9a3baff68082c30a7b43e8e9b7/src/Discord.Net.Core/Entities/Messages/EmbedBuilder.cs#L431
+					const int MaxFieldValueLength = 1024;
+					showDMOutput = showDMOutput && dreamMakerOutput.Length < MaxFieldValueLength - (6 + Environment.NewLine.Length);
+					if (showDMOutput)
+						fields.Add(new EmbedField(
+							"Compiler Output",
+							$"```{Environment.NewLine}{dreamMakerOutput}{Environment.NewLine}```",
+							false));
+				}
 
 				if (errorMessage != null)
-					builder.AddField(new EmbedFieldBuilder
-					{
-						Name = "Error Message",
-						Value = errorMessage
-					});
+					fields.Add(new EmbedField(
+						"Error Message",
+						errorMessage,
+						false));
 
-				var updatedMessage = $"DM: Deployment {completionString}!";
-				try
+				var updatedMessageText = errorMessage == null ? $"{prefix}: Deployment pending reboot..." : $"{prefix}: Deployment failed!";
+
+				IMessage? updatedMessage = null;
+				async ValueTask CreateUpdatedMessage()
 				{
-					await message.ModifyAsync(
-						props =>
-						{
-							props.Content = updatedMessage;
-							props.Embed = builder.Build();
-						})
-						.ConfigureAwait(false);
+					var createUpdatedMessageResponse = await channelsClient.CreateMessageAsync(
+						new Snowflake(channelId),
+						updatedMessageText,
+						embeds: new List<IEmbed> { embed },
+						ct: cancellationToken);
+
+					if (!createUpdatedMessageResponse.IsSuccess)
+						Logger.LogWarning(
+							"Creating updated deploy embed failed: {result}",
+							createUpdatedMessageResponse.LogFormat());
+					else
+						updatedMessage = createUpdatedMessageResponse.Entity;
 				}
-				catch (Exception ex)
+
+				if (!messageResponse.IsSuccess)
+					await CreateUpdatedMessage();
+				else
 				{
-					Logger.LogWarning(ex, "Updating deploy embed {0} failed, attempting new post!", message.Id);
-					try
+					var editResponse = await channelsClient.EditMessageAsync(
+						new Snowflake(channelId),
+						messageResponse.Entity.ID,
+						updatedMessageText,
+						embeds: new List<IEmbed> { embed },
+						ct: cancellationToken);
+
+					if (!editResponse.IsSuccess)
 					{
-						await channel.SendMessageAsync(
-							updatedMessage,
-							false,
-							builder.Build())
-							.ConfigureAwait(false);
+						Logger.LogWarning(
+							"Updating deploy embed {messageId} failed, attempting new post: {result}",
+							messageResponse.Entity.ID,
+							editResponse.LogFormat());
+						await CreateUpdatedMessage();
 					}
-					catch (Exception ex2)
-					{
-						Logger.LogWarning(ex2, "Posting completion deploy embed failed!");
-					}
+					else
+						updatedMessage = editResponse.Entity;
 				}
+
+				return async (active) =>
+				{
+					if (updatedMessage == null || errorMessage != null)
+						return;
+
+					if (active)
+					{
+						completionString = "Succeeded";
+						updatedMessageText = $"{prefix}: Deployment succeeded!";
+						embed = CreateUpdatedEmbed(
+							"The deployment completed successfully and was applied to server.",
+							Color.Green);
+					}
+					else
+					{
+						completionString = "Inactive";
+						embed = CreateUpdatedEmbed(
+							"This deployment has been superceeded by a new one.",
+							Color.Gray);
+					}
+
+					var editResponse = await channelsClient.EditMessageAsync(
+						new Snowflake(channelId),
+						updatedMessage.ID,
+						updatedMessageText,
+						embeds: new List<IEmbed> { embed },
+						ct: cancellationToken);
+
+					if (!editResponse.IsSuccess)
+						Logger.LogWarning(
+							"Finalizing deploy embed {messageId} failed: {result}",
+							messageResponse.Entity.ID,
+							editResponse.LogFormat());
+				};
 			};
 		}
+
+		/// <inheritdoc />
+		public async Task<Result> RespondAsync(IMessageCreate messageCreateEvent, CancellationToken cancellationToken)
+		{
+			ArgumentNullException.ThrowIfNull(messageCreateEvent);
+
+			if (!messageContentsAvailable && messageCreateEvent.GuildID.HasValue)
+				return Result.FromSuccess();
+
+			if ((messageCreateEvent.Type != MessageType.Default
+				&& messageCreateEvent.Type != MessageType.InlineReply)
+				|| messageCreateEvent.Author.ID == currentUserId)
+				return Result.FromSuccess();
+
+			var messageReference = new MessageReference
+			{
+				ChannelID = messageCreateEvent.ChannelID,
+				GuildID = messageCreateEvent.GuildID,
+				MessageID = messageCreateEvent.ID,
+				FailIfNotExists = false,
+			};
+
+			var channelsClient = serviceProvider.GetRequiredService<IDiscordRestChannelAPI>();
+			var channelResponse = await channelsClient.GetChannelAsync(messageCreateEvent.ChannelID, cancellationToken);
+			if (!channelResponse.IsSuccess)
+			{
+				Logger.LogWarning(
+					"Failed to get channel {channelId} in response to message {messageId}!",
+					messageCreateEvent.ChannelID,
+					messageCreateEvent.ID);
+
+				// we'll handle the errors ourselves
+				return Result.FromSuccess();
+			}
+
+			var pm = channelResponse.Entity.Type == ChannelType.DM || channelResponse.Entity.Type == ChannelType.GroupDM;
+			var shouldNotAnswer = !pm;
+			if (shouldNotAnswer)
+				lock (mappedChannels)
+					shouldNotAnswer = !mappedChannels.Contains(messageCreateEvent.ChannelID.Value) && !mappedChannels.Contains(0);
+
+			var content = NormalizeMentions(messageCreateEvent.Content);
+			var mentionedUs = messageCreateEvent.Mentions.Any(x => x.ID == currentUserId)
+				|| (!shouldNotAnswer && content.Split(' ').First().Equals(ChatManager.CommonMention, StringComparison.OrdinalIgnoreCase));
+
+			if (shouldNotAnswer)
+			{
+				if (mentionedUs)
+					Logger.LogTrace(
+						"Ignoring mention from {channelId} ({channelName}) by {authorId} ({authorName}). Channel not mapped!",
+						messageCreateEvent.ChannelID,
+						channelResponse.Entity.Name,
+						messageCreateEvent.Author.ID,
+						messageCreateEvent.Author.Username);
+
+				return Result.FromSuccess();
+			}
+
+			string guildName = "UNKNOWN";
+			if (!pm)
+			{
+				var guildsClient = serviceProvider.GetRequiredService<IDiscordRestGuildAPI>();
+				var messageGuildResponse = await guildsClient.GetGuildAsync(messageCreateEvent.GuildID.Value, false, cancellationToken);
+				if (messageGuildResponse.IsSuccess)
+					guildName = messageGuildResponse.Entity.Name;
+				else
+					Logger.LogWarning(
+						"Failed to get channel {channelID} in response to message {messageID}: {result}",
+						messageCreateEvent.ChannelID,
+						messageCreateEvent.ID,
+						messageGuildResponse.LogFormat());
+			}
+
+			var result = new DiscordMessage(
+				new ChatUser(
+					new ChannelRepresentation(
+						pm ? messageCreateEvent.Author.Username : guildName,
+						channelResponse.Entity.Name.Value!,
+						messageCreateEvent.ChannelID.Value)
+					{
+						IsPrivateChannel = pm,
+						EmbedsSupported = true,
+
+						// isAdmin and Tag populated by manager
+					},
+					messageCreateEvent.Author.Username,
+					NormalizeMentions($"<@{messageCreateEvent.Author.ID}>"),
+					messageCreateEvent.Author.ID.Value),
+				content,
+				messageReference);
+
+			EnqueueMessage(result);
+			return Result.FromSuccess();
+		}
+
+		/// <inheritdoc />
+		public async Task<Result> RespondAsync(IInteractionCreate interactionCreateEvent, CancellationToken cancellationToken)
+		{
+			ArgumentNullException.ThrowIfNull(interactionCreateEvent);
+
+			var interactionData = interactionCreateEvent.Data;
+			if ((interactionCreateEvent.Type != InteractionType.ApplicationCommand
+					&& interactionCreateEvent.Type != InteractionType.ApplicationCommandAutocomplete)
+				|| !interactionData.HasValue
+				|| !interactionData.Value.IsT0
+				|| !interactionData.Value.AsT0.Name.Equals(slashCommandName, StringComparison.OrdinalIgnoreCase))
+				return Result.FromSuccess();
+
+			var commandData = interactionData.Value.AsT0;
+			var interactionClient = serviceProvider.GetRequiredService<IDiscordRestInteractionAPI>();
+			Task RespondWithError(string message)
+				=> interactionClient.EditOriginalInteractionResponseAsync(
+					interactionCreateEvent.ApplicationID,
+					interactionCreateEvent.Token,
+					message,
+					ct: cancellationToken);
+
+			if (interactionCreateEvent.Type == InteractionType.ApplicationCommandAutocomplete)
+				return await RespondAutocomplete(interactionCreateEvent, commandData, interactionClient, cancellationToken);
+
+			var deferResponse = await interactionClient.CreateInteractionResponseAsync(
+				interactionCreateEvent.ID,
+				interactionCreateEvent.Token,
+				new InteractionResponse(InteractionCallbackType.DeferredChannelMessageWithSource),
+				ct: cancellationToken);
+			if (!deferResponse.IsSuccess)
+			{
+				Logger.LogWarning(
+					"Failed to defer slash command response {interactionId}: {result}",
+					interactionCreateEvent.ID,
+					deferResponse.LogFormat());
+				return Result.FromSuccess();
+			}
+
+			var commandText = GetStringOption(commandData, SlashCommandOptionName);
+			if (String.IsNullOrWhiteSpace(commandText))
+			{
+				await RespondWithError("TGS: No command text supplied.");
+				return Result.FromSuccess();
+			}
+
+			var arguments = GetStringOption(commandData, SlashCommandArgumentsOptionName);
+
+			if (!interactionCreateEvent.Channel.HasValue || !interactionCreateEvent.Channel.Value.ID.HasValue)
+			{
+				await RespondWithError("TGS: Processing error, check logs!");
+				return Result.FromSuccess();
+			}
+
+			var channelId = interactionCreateEvent.Channel.Value.ID.Value;
+			var channelsClient = serviceProvider.GetRequiredService<IDiscordRestChannelAPI>();
+			var channelResponse = await channelsClient.GetChannelAsync(channelId, cancellationToken);
+			if (!channelResponse.IsSuccess)
+			{
+				Logger.LogWarning(
+					"Failed to get channel {channelId} in response to interaction {interactionId}: {result}",
+					channelId,
+					interactionCreateEvent.ID,
+					channelResponse.LogFormat());
+
+				await RespondWithError("TGS: Processing error, check logs!");
+				return Result.FromSuccess();
+			}
+
+			var pm = channelResponse.Entity.Type == ChannelType.DM || channelResponse.Entity.Type == ChannelType.GroupDM;
+			var shouldNotAnswer = !pm;
+			if (shouldNotAnswer)
+				lock (mappedChannels)
+					shouldNotAnswer = !mappedChannels.Contains(channelId.Value) && !mappedChannels.Contains(0);
+
+			if (shouldNotAnswer)
+			{
+				await RespondWithError("TGS: This channel is not mapped.");
+				return Result.FromSuccess();
+			}
+
+			string guildName = "UNKNOWN";
+			if (!pm)
+			{
+				var guildsClient = serviceProvider.GetRequiredService<IDiscordRestGuildAPI>();
+				var guildResponse = await guildsClient.GetGuildAsync(interactionCreateEvent.GuildID.Value, false, cancellationToken);
+				if (guildResponse.IsSuccess)
+					guildName = guildResponse.Entity.Name;
+				else
+					Logger.LogWarning(
+						"Failed to get guild {guildId} in response to interaction {interactionId}: {result}",
+						interactionCreateEvent.GuildID.Value,
+						interactionCreateEvent.ID,
+						guildResponse.LogFormat());
+			}
+
+			var user = interactionCreateEvent.Member.HasValue && interactionCreateEvent.Member.Value.User.HasValue
+				? interactionCreateEvent.Member.Value.User.Value
+				: interactionCreateEvent.User.Value;
+			var result = new DiscordMessage(
+				new ChatUser(
+					new ChannelRepresentation(
+						pm ? user.Username : guildName,
+						channelResponse.Entity.Name.Value!,
+						channelId.Value)
+					{
+						IsPrivateChannel = pm,
+						EmbedsSupported = true,
+					},
+					user.Username,
+					NormalizeMentions($"<@{user.ID}>"),
+					user.ID.Value),
+				BuildSlashCommandMessageContent(commandText, arguments),
+				default,
+				interactionCreateEvent.ApplicationID,
+				interactionCreateEvent.Token);
+
+			EnqueueMessage(result);
+			return Result.FromSuccess();
+		}
+
+		/// <inheritdoc />
+		public Task<Result> RespondAsync(IReady readyEvent, CancellationToken cancellationToken)
+		{
+			ArgumentNullException.ThrowIfNull(readyEvent);
+
+			Logger.LogTrace("Gatway ready. Version: {version}", readyEvent.Version);
+			gatewayReadyTcs?.TrySetResult();
+			return Task.FromResult(Result.FromSuccess());
+		}
+
+		/// <inheritdoc />
+		protected override async ValueTask Connect(CancellationToken cancellationToken)
+		{
+			try
+			{
+				lock (connectDisconnectLock)
+				{
+					if (gatewayCts != null)
+						throw new InvalidOperationException("Discord gateway still active!");
+
+					gatewayCts = new CancellationTokenSource();
+				}
+
+				var gatewayCancellationToken = gatewayCts.Token;
+				Task<Result>? localGatewayTask = null;
+				using var localCombinedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, gatewayCancellationToken);
+				var localCombinedCancellationToken = localCombinedCts.Token;
+
+				try
+				{
+					var applicationClient = serviceProvider.GetRequiredService<IDiscordRestApplicationAPI>();
+					var currentApplicationResponse = await applicationClient.GetCurrentApplicationAsync(localCombinedCancellationToken);
+					if (currentApplicationResponse.IsSuccess)
+					{
+						var application = currentApplicationResponse.Entity;
+						SetMessageContentsAvailable(application.Flags.HasValue && HasMessageContentIntent(application.Flags.Value));
+						await RegisterSlashCommand(application.ID, localCombinedCancellationToken);
+					}
+					else
+					{
+						localCombinedCancellationToken.ThrowIfCancellationRequested();
+						Logger.LogWarning(
+							"Unable to retrieve current Discord application. Retrying connection: {result}",
+							currentApplicationResponse.LogFormat());
+						throw new JobException(
+							ErrorCode.ChatCannotConnectProvider,
+							new InvalidOperationException($"Discord application request failed: {currentApplicationResponse.LogFormat()}"));
+					}
+
+					var gatewayClient = serviceProvider.GetRequiredService<DiscordGatewayClient>();
+
+					gatewayReadyTcs = new TaskCompletionSource();
+
+					using var gatewayConnectionAbortRegistration = cancellationToken.Register(() => gatewayReadyTcs.TrySetCanceled(cancellationToken));
+					gatewayCancellationToken.Register(() => Logger.LogTrace("Stopping gateway client..."));
+
+					// reconnects keep happening until we stop or it faults, our auto reconnector will handle the latter
+					localGatewayTask = gatewayClient.RunAsync(gatewayCancellationToken);
+					await Task.WhenAny(gatewayReadyTcs.Task, localGatewayTask);
+
+					cancellationToken.ThrowIfCancellationRequested();
+					if (localGatewayTask.IsCompleted)
+					{
+						var gatewayResult = await localGatewayTask;
+						Logger.LogWarning("Discord gateway stopped before becoming ready: {result}", gatewayResult.LogFormat());
+						throw new JobException(
+							ErrorCode.ChatCannotConnectProvider,
+							new InvalidOperationException($"Discord gateway failed: {gatewayResult.LogFormat()}"));
+					}
+
+					var userClient = serviceProvider.GetRequiredService<IDiscordRestUserAPI>();
+					var currentUserResult = await userClient.GetCurrentUserAsync(localCombinedCancellationToken);
+					if (!currentUserResult.IsSuccess)
+					{
+						localCombinedCancellationToken.ThrowIfCancellationRequested();
+						Logger.LogWarning("Unable to retrieve current user: {result}", currentUserResult.LogFormat());
+						throw new JobException(
+							ErrorCode.ChatCannotConnectProvider,
+							new InvalidOperationException($"Discord current-user request failed: {currentUserResult.LogFormat()}"));
+					}
+
+					currentUserId = currentUserResult.Entity.ID;
+				}
+				finally
+				{
+					gatewayTask = localGatewayTask;
+				}
+			}
+			catch
+			{
+				// will handle cleanup
+				// DCT: Musn't abort
+				await DisconnectImpl(CancellationToken.None);
+				throw;
+			}
+		}
+
+		/// <inheritdoc />
+		protected override async ValueTask DisconnectImpl(CancellationToken cancellationToken)
+		{
+			Task<Result> localGatewayTask;
+			CancellationTokenSource localGatewayCts;
+			lock (connectDisconnectLock)
+			{
+				localGatewayTask = gatewayTask!;
+				localGatewayCts = gatewayCts!;
+				gatewayTask = null;
+				gatewayCts = null;
+				if (localGatewayTask == null)
+				{
+					localGatewayCts?.Dispose();
+					return;
+				}
+			}
+
+			localGatewayCts.Cancel();
+			var gatewayResult = await localGatewayTask;
+
+			Logger.LogTrace("Gateway task complete");
+			if (!gatewayResult.IsSuccess)
+				Logger.LogWarning("Gateway issue: {result}", gatewayResult.LogFormat());
+
+			localGatewayCts.Dispose();
+		}
+
+		/// <inheritdoc />
+		protected override async ValueTask<Dictionary<Models.ChatChannel, IEnumerable<ChannelRepresentation>>> MapChannelsImpl(IEnumerable<Models.ChatChannel> channels, CancellationToken cancellationToken)
+		{
+			ArgumentNullException.ThrowIfNull(channels);
+
+			var remapRequired = false;
+			var guildsClient = serviceProvider.GetRequiredService<IDiscordRestGuildAPI>();
+			var guildTasks = new ConcurrentDictionary<Snowflake, Task<Result<IGuild>>>();
+
+			async ValueTask<Tuple<Models.ChatChannel, IEnumerable<ChannelRepresentation>>?> GetModelChannelFromDBChannel(Models.ChatChannel channelFromDB)
+			{
+				if (!channelFromDB.DiscordChannelId.HasValue)
+					throw new InvalidOperationException("ChatChannel missing DiscordChannelId!");
+
+				var channelId = channelFromDB.DiscordChannelId.Value;
+				var channelsClient = serviceProvider.GetRequiredService<IDiscordRestChannelAPI>();
+				var discordChannelResponse = await channelsClient.GetChannelAsync(new Snowflake(channelId), cancellationToken);
+				if (!discordChannelResponse.IsSuccess)
+				{
+					Logger.LogWarning(
+						"Error retrieving discord channel {channelId}: {result}",
+						channelId,
+						discordChannelResponse.LogFormat());
+
+					var remapConditional = !(discordChannelResponse.Error is RestResultError<RestError> restResultError
+						&& (restResultError.Error?.Code == DiscordError.MissingAccess
+						|| restResultError.Error?.Code == DiscordError.UnknownChannel));
+
+					if (remapConditional)
+					{
+						Logger.Log(
+							remapRequired
+								? LogLevel.Trace
+								: LogLevel.Debug,
+							"Error on channel {channelId} is not an access/thread issue. Will retry remap...",
+							channelId);
+						remapRequired = true;
+					}
+
+					return null;
+				}
+
+				var channelType = discordChannelResponse.Entity.Type;
+				if (!SupportedGuildChannelTypes.Contains(channelType))
+				{
+					Logger.LogWarning("Cound not map channel {channelId}! Incorrect type: {channelType}", channelId, discordChannelResponse.Entity.Type);
+					return null;
+				}
+
+				var guildId = discordChannelResponse.Entity.GuildID.Value;
+
+				var added = false;
+				var guildsResponse = await guildTasks.GetOrAdd(
+					guildId,
+					localGuildId =>
+					{
+						added = true;
+						return guildsClient.GetGuildAsync(
+							localGuildId,
+							false,
+							cancellationToken);
+					});
+				if (!guildsResponse.IsSuccess)
+				{
+					if (added)
+					{
+						Logger.LogWarning(
+							"Error retrieving discord guild {guildID}: {result}",
+							guildId,
+							guildsResponse.LogFormat());
+						remapRequired = true;
+					}
+
+					return null;
+				}
+
+				var connectionName = guildsResponse.Entity.Name;
+
+				var channelModel = new ChannelRepresentation(
+					guildsResponse.Entity.Name,
+					discordChannelResponse.Entity.Name.Value!,
+					channelId)
+				{
+					IsAdminChannel = channelFromDB.IsAdminChannel == true,
+					IsPrivateChannel = false,
+					Tag = channelFromDB.Tag,
+					EmbedsSupported = true,
+				};
+
+				Logger.LogTrace("Mapped channel {realId}: {friendlyName}", channelModel.RealId, channelModel.FriendlyName);
+				return Tuple.Create<Models.ChatChannel, IEnumerable<ChannelRepresentation>>(
+					channelFromDB,
+					new List<ChannelRepresentation> { channelModel });
+			}
+
+			var tasks = channels
+				.Where(x => x.DiscordChannelId != 0)
+				.Select(GetModelChannelFromDBChannel);
+
+			var channelTuples = await ValueTaskExtensions.WhenAll(tasks.ToList());
+
+			var list = channelTuples
+				.Where(x => x != null)
+				.Cast<Tuple<Models.ChatChannel, IEnumerable<ChannelRepresentation>>>() // NRT my beloathed
+				.ToList();
+
+			var channelIdZeroModel = channels.FirstOrDefault(x => x.DiscordChannelId == 0);
+			if (channelIdZeroModel != null)
+			{
+				Logger.LogInformation("Mapping ALL additional accessible text channels");
+				var allAccessibleChannels = await GetAllAccessibleTextChannels(cancellationToken);
+				var unmappedTextChannels = allAccessibleChannels
+					.Where(x => !tasks.Any(task => task.Result != null && new Snowflake(task.Result.Item1.DiscordChannelId!.Value) == x.ID));
+
+				async ValueTask<Tuple<Models.ChatChannel, IEnumerable<ChannelRepresentation>>> CreateMappingsForUnmappedChannels()
+				{
+					var unmappedTasks =
+						unmappedTextChannels.Select(
+							async unmappedTextChannel =>
+							{
+								var fakeChannelModel = new Models.ChatChannel
+								{
+									DiscordChannelId = unmappedTextChannel.ID.Value,
+									IsAdminChannel = channelIdZeroModel.IsAdminChannel,
+									Tag = channelIdZeroModel.Tag,
+								};
+
+								var tuple = await GetModelChannelFromDBChannel(fakeChannelModel);
+								return tuple?.Item2.First();
+							})
+						.ToList();
+
+					// Add catch-all channel
+					unmappedTasks.Add(Task.FromResult<ChannelRepresentation?>(
+						new ChannelRepresentation(
+							"(Unknown Discord Guilds)",
+							"(Unknown Discord Channels)",
+							0)
+						{
+							IsAdminChannel = channelIdZeroModel.IsAdminChannel!.Value,
+							EmbedsSupported = true,
+							Tag = channelIdZeroModel.Tag,
+						}));
+
+					await Task.WhenAll(unmappedTasks);
+					return Tuple.Create<Models.ChatChannel, IEnumerable<ChannelRepresentation>>(
+						channelIdZeroModel,
+						unmappedTasks
+							.Select(x => x.Result)
+							.Where(x => x != null)
+							.Cast<ChannelRepresentation>() // NRT my beloathed
+							.ToList());
+				}
+
+				var task = CreateMappingsForUnmappedChannels();
+				var tuple = await task;
+				list.Add(tuple);
+			}
+
+			lock (mappedChannels)
+			{
+				mappedChannels.Clear();
+				mappedChannels.AddRange(list.SelectMany(x => x.Item2).Select(x => x.RealId));
+			}
+
+			if (remapRequired)
+			{
+				Logger.LogWarning("Some channels failed to load with unknown errors. We will request that these be remapped, but it may result in communication spam. Please check prior logs and report an issue if this occurs.");
+				EnqueueMessage(null);
+			}
+
+			return new Dictionary<Models.ChatChannel, IEnumerable<ChannelRepresentation>>(list.Select(x => new KeyValuePair<Models.ChatChannel, IEnumerable<ChannelRepresentation>>(x.Item1, x.Item2)));
+		}
+
+		/// <summary>
+		/// Sets if message contents are available and updates the gateway options.
+		/// </summary>
+		/// <param name="available">If message contents are available.</param>
+		void SetMessageContentsAvailable(bool available)
+		{
+			messageContentsAvailable = available;
+			var gatewayOptions = serviceProvider.GetRequiredService<IOptions<DiscordGatewayClientOptions>>().Value;
+			if (available)
+				gatewayOptions.Intents |= GatewayIntents.MessageContents;
+			else
+				gatewayOptions.Intents &= ~GatewayIntents.MessageContents;
+		}
+
+		/// <summary>
+		/// Get all text <see cref="IChannel"/>s accessible to and supported by the bot.
+		/// </summary>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="Task{TResult}"/> resulting in an <see cref="IEnumerable{T}"/> of accessible and compatible <see cref="IChannel"/>s.</returns>
+		async ValueTask<IEnumerable<IChannel>> GetAllAccessibleTextChannels(CancellationToken cancellationToken)
+		{
+			var usersClient = serviceProvider.GetRequiredService<IDiscordRestUserAPI>();
+			var currentGuildsResponse = await usersClient.GetCurrentUserGuildsAsync(ct: cancellationToken);
+			if (!currentGuildsResponse.IsSuccess)
+			{
+				Logger.LogWarning(
+					"Error retrieving current discord guilds: {result}",
+					currentGuildsResponse.LogFormat());
+				return Enumerable.Empty<IChannel>();
+			}
+
+			var guildsClient = serviceProvider.GetRequiredService<IDiscordRestGuildAPI>();
+
+			async ValueTask<IEnumerable<IChannel>> GetGuildChannels(IPartialGuild guild)
+			{
+				var channelsTask = guildsClient.GetGuildChannelsAsync(guild.ID.Value, cancellationToken);
+				var threads = await guildsClient.ListActiveGuildThreadsAsync(guild.ID.Value, cancellationToken);
+				if (!threads.IsSuccess)
+					Logger.LogWarning(
+						"Error retrieving discord guild threads {guildId} ({guildName}): {result}",
+						guild.ID,
+						guild.Name,
+						threads.LogFormat());
+
+				var channels = await channelsTask;
+				if (!channels.IsSuccess)
+					Logger.LogWarning(
+						"Error retrieving discord guild channels {guildId} ({guildName}): {result}",
+						guild.ID,
+						guild.Name,
+						channels.LogFormat());
+
+				if (!channels.IsSuccess && !threads.IsSuccess)
+					return Enumerable.Empty<IChannel>();
+
+				if (channels.IsSuccess && threads.IsSuccess)
+					return channels.Entity.Concat(threads.Entity.Threads ?? Enumerable.Empty<IChannel>());
+
+				return channels.Entity ?? threads.Entity?.Threads ?? Enumerable.Empty<IChannel>();
+			}
+
+			var guildsChannelsTasks = currentGuildsResponse.Entity
+				.Select(GetGuildChannels);
+
+			var guildsChannels = await ValueTaskExtensions.WhenAll(guildsChannelsTasks, currentGuildsResponse.Entity.Count);
+
+			var allAccessibleChannels = guildsChannels
+				.SelectMany(channels => channels)
+				.Where(guildChannel => SupportedGuildChannelTypes.Contains(guildChannel.Type));
+
+			return allAccessibleChannels;
+		}
+
+		/// <summary>
+		/// Responds to a Discord slash command autocomplete interaction.
+		/// </summary>
+		/// <param name="interactionCreateEvent">The interaction event.</param>
+		/// <param name="commandData">The command data.</param>
+		/// <param name="interactionClient">The interaction API.</param>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="Result"/> representing the command's result.</returns>
+		async Task<Result> RespondAutocomplete(
+			IInteractionCreate interactionCreateEvent,
+			IApplicationCommandData commandData,
+			IDiscordRestInteractionAPI interactionClient,
+			CancellationToken cancellationToken)
+		{
+			var focusedCommand = commandData.Options.HasValue
+				? commandData.Options.Value.FirstOrDefault(option => option.Name.Equals(SlashCommandOptionName, StringComparison.Ordinal) && option.IsFocused.HasValue && option.IsFocused.Value)
+				: null;
+			var focusedValue = focusedCommand != null && focusedCommand.Value.HasValue && focusedCommand.Value.Value.IsT0
+				? focusedCommand.Value.Value.AsT0
+				: String.Empty;
+
+			var choices = commandNamesFactory()
+				.Where(command => String.IsNullOrEmpty(focusedValue) || command.StartsWith(focusedValue, StringComparison.OrdinalIgnoreCase))
+				.Take(MaxAutocompleteChoices)
+				.Select(command => (IApplicationCommandOptionChoice)new ApplicationCommandOptionChoice(command, OneOf<string, int, double>.FromT0(command)))
+				.ToList();
+
+			var response = await interactionClient.CreateInteractionResponseAsync(
+				interactionCreateEvent.ID,
+				interactionCreateEvent.Token,
+				new InteractionResponse(
+					InteractionCallbackType.ApplicationCommandAutocompleteResult,
+					new Optional<OneOf<IInteractionMessageCallbackData, IInteractionAutocompleteCallbackData, IInteractionModalCallbackData>>(
+						OneOf<IInteractionMessageCallbackData, IInteractionAutocompleteCallbackData, IInteractionModalCallbackData>.FromT1(
+							new InteractionAutocompleteCallbackData(choices)))),
+				ct: cancellationToken);
+
+			if (!response.IsSuccess)
+				Logger.LogWarning(
+					"Failed to respond to slash command autocomplete {interactionId}: {result}",
+					interactionCreateEvent.ID,
+					response.LogFormat());
+
+			return Result.FromSuccess();
+		}
+
+		/// <summary>
+		/// Registers the configured slash command.
+		/// </summary>
+		/// <param name="applicationId">The Discord application ID.</param>
+		/// <param name="cancellationToken">The <see cref="CancellationToken"/> for the operation.</param>
+		/// <returns>A <see cref="ValueTask"/> representing the running operation.</returns>
+		async ValueTask RegisterSlashCommand(Snowflake applicationId, CancellationToken cancellationToken)
+		{
+			var applicationClient = serviceProvider.GetRequiredService<IDiscordRestApplicationAPI>();
+			var updateResponse = await applicationClient.CreateGlobalApplicationCommandAsync(
+				applicationId,
+				slashCommandName,
+				SlashCommandDescription,
+				new Optional<IReadOnlyList<IApplicationCommandOption>>(SlashCommandOptions),
+				ct: cancellationToken);
+
+			if (!updateResponse.IsSuccess)
+			{
+				cancellationToken.ThrowIfCancellationRequested();
+				Logger.LogWarning("Unable to register Discord slash command: {result}", updateResponse.LogFormat());
+				throw new JobException(
+					ErrorCode.ChatCannotConnectProvider,
+					new InvalidOperationException($"Discord slash-command registration failed: {updateResponse.LogFormat()}"));
+			}
+
+			Logger.LogInformation("Registered global Discord slash command /{slashCommandName}.", slashCommandName);
+
+			var globalCommandsResponse = await applicationClient.GetGlobalApplicationCommandsAsync(applicationId, ct: cancellationToken);
+			if (globalCommandsResponse.IsSuccess)
+				foreach (var command in globalCommandsResponse.Entity.Where(command => IsTgsSlashCommand(command, slashCommandName)))
+				{
+					var deleteResponse = await applicationClient.DeleteGlobalApplicationCommandAsync(applicationId, command.ID, cancellationToken);
+					if (!deleteResponse.IsSuccess)
+						Logger.LogWarning("Unable to remove stale global Discord slash command {commandId}: {result}", command.ID, deleteResponse.LogFormat());
+					else
+						Logger.LogInformation("Removed stale global Discord slash command /{commandName}.", command.Name);
+				}
+			else
+				Logger.LogWarning("Unable to inspect global Discord slash commands for stale entries: {result}", globalCommandsResponse.LogFormat());
+		}
+
+		/// <summary>
+		/// Create a <see cref="List{T}"/> of <see cref="IEmbedField"/>s for a discord update embed.
+		/// </summary>
+		/// <param name="revisionInformation">The <see cref="RevisionInformation"/> of the deployment.</param>
+		/// <param name="previousRevisionInformation">The optional <see cref="RevisionInformation"/> of the previous deployment.</param>
+		/// <param name="engineVersion">The <see cref="EngineVersion"/> of the deployment.</param>
+		/// <param name="gitHubOwner">The repository GitHub owner, if any.</param>
+		/// <param name="gitHubRepo">The repository GitHub name, if any.</param>
+		/// <param name="localCommitPushed"><see langword="true"/> if the local deployment commit was pushed to the remote repository.</param>
+		/// <returns>A new <see cref="List{T}"/> of <see cref="IEmbedField"/>s to use.</returns>
+		List<IEmbedField> BuildUpdateEmbedFields(
+			Models.RevisionInformation revisionInformation,
+			Models.RevisionInformation? previousRevisionInformation,
+			EngineVersion engineVersion,
+			string? gitHubOwner,
+			string? gitHubRepo,
+			bool localCommitPushed)
+		{
+			bool gitHub = gitHubOwner != null && gitHubRepo != null;
+			var engineField = engineVersion.Engine!.Value switch
+			{
+				EngineType.Byond => new EmbedField(
+					"BYOND Version",
+					$"{engineVersion.Version!.Major}.{engineVersion.Version.Minor}{(engineVersion.CustomIteration.HasValue ? $".{engineVersion.CustomIteration.Value}" : String.Empty)}",
+					true),
+				EngineType.OpenDream => new EmbedField(
+					"OpenDream Version",
+					$"[{engineVersion.SourceSHA![..7]}]({generalConfigurationOptions.CurrentValue.OpenDreamGitUrl}/commit/{engineVersion.SourceSHA})",
+					true),
+				_ => throw new InvalidOperationException($"Invaild EngineType: {engineVersion.Engine.Value}"),
+			};
+
+			var revisionSha = revisionInformation.CommitSha!;
+			var revisionOriginSha = revisionInformation.OriginCommitSha!;
+			var fields = new List<IEmbedField>
+			{
+				engineField,
+			};
+
+			if (gitHubOwner == null || gitHubRepo == null)
+				return fields;
+
+			var previousTestMerges = (IEnumerable<RevInfoTestMerge>?)previousRevisionInformation?.ActiveTestMerges ?? Enumerable.Empty<RevInfoTestMerge>();
+			var currentTestMerges = (IEnumerable<RevInfoTestMerge>?)revisionInformation.ActiveTestMerges ?? Enumerable.Empty<RevInfoTestMerge>();
+
+			// determine what TMs were changed and how
+			var addedTestMerges = currentTestMerges
+				.Select(x => x.TestMerge)
+				.Where(x => !previousTestMerges
+					.Any(y => y.TestMerge.Number == x.Number))
+				.ToList();
+			var removedTestMerges = previousTestMerges
+				.Select(x => x.TestMerge)
+				.Where(x => !currentTestMerges
+					.Any(y => y.TestMerge.Number == x.Number))
+				.ToList();
+			var updatedTestMerges = currentTestMerges
+				.Select(x => x.TestMerge)
+				.Where(x => previousTestMerges
+					.Any(y => y.TestMerge.Number == x.Number && y.TestMerge.TargetCommitSha != x.TargetCommitSha))
+				.ToList();
+			var unchangedTestMerges = currentTestMerges
+				.Select(x => x.TestMerge)
+				.Where(x => previousTestMerges
+					.Any(y => y.TestMerge.Number == x.Number && y.TestMerge.TargetCommitSha == x.TargetCommitSha))
+				.ToList();
+
+			fields.Add(
+				new EmbedField(
+					"Local Commit",
+					localCommitPushed && gitHub
+						? $"[{revisionSha[..7]}](https://github.com/{gitHubOwner}/{gitHubRepo}/commit/{revisionSha})"
+						: revisionSha[..7],
+					true));
+
+			fields.Add(
+				new EmbedField(
+					"Branch Commit",
+					gitHub
+						? $"[{revisionOriginSha[..7]}](https://github.com/{gitHubOwner}/{gitHubRepo}/commit/{revisionOriginSha})"
+						: revisionOriginSha[..7],
+					true));
+
+			fields.AddRange(addedTestMerges
+				.Select(x => new EmbedField(
+					$"#{x.Number} (Added)",
+					$"[{x.TitleAtMerge}]({x.Url}) by _[@{x.Author}](https://github.com/{x.Author})_{Environment.NewLine}Commit: [{x.TargetCommitSha![..7]}](https://github.com/{gitHubOwner}/{gitHubRepo}/commit/{x.TargetCommitSha}){(String.IsNullOrWhiteSpace(x.Comment) ? String.Empty : $"{Environment.NewLine}_**{x.Comment}**_")}",
+					false)));
+
+			fields.AddRange(updatedTestMerges
+				.Select(x => new EmbedField(
+					$"#{x.Number} (Updated)",
+					$"[{x.TitleAtMerge}]({x.Url}) by _[@{x.Author}](https://github.com/{x.Author})_{Environment.NewLine}Commit: [{x.TargetCommitSha![..7]}](https://github.com/{gitHubOwner}/{gitHubRepo}/commit/{x.TargetCommitSha}){(String.IsNullOrWhiteSpace(x.Comment) ? String.Empty : $"{Environment.NewLine}_**{x.Comment}**_")}",
+					false)));
+
+			fields.AddRange(unchangedTestMerges
+				.Select(x => new EmbedField(
+					$"#{x.Number}",
+					$"[{x.TitleAtMerge}]({x.Url}) by _[@{x.Author}](https://github.com/{x.Author})_{Environment.NewLine}Commit: [{x.TargetCommitSha![..7]}](https://github.com/{gitHubOwner}/{gitHubRepo}/commit/{x.TargetCommitSha}){(String.IsNullOrWhiteSpace(x.Comment) ? String.Empty : $"{Environment.NewLine}_**{x.Comment}**_")}",
+					false)));
+
+			if (removedTestMerges.Count != 0)
+				fields.Add(
+				new EmbedField(
+					"Removed:",
+					String.Join(
+						Environment.NewLine,
+						removedTestMerges
+							.Select(x => $"- #{x.Number} [{x.TitleAtMerge}]({x.Url}) by _[@{x.Author}](https://github.com/{x.Author})_"))));
+
+			return fields;
+		}
+
+		/// <summary>
+		/// Convert a <see cref="ChatEmbed"/> to an <see cref="IEmbed"/> parameters.
+		/// </summary>
+		/// <param name="embed">The <see cref="ChatEmbed"/> to convert.</param>
+		/// <returns>The parameter for sending a single <see cref="IEmbed"/>.</returns>
+#pragma warning disable CA1502
+		Optional<IReadOnlyList<IEmbed>> ConvertEmbed(ChatEmbed? embed)
+		{
+			if (embed == null)
+				return default;
+
+			var embedErrors = new List<string>();
+			Optional<Color> colour = default;
+			if (embed.Colour != null)
+				if (Int32.TryParse(embed.Colour[1..], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var argb))
+					colour = Color.FromArgb(argb);
+				else
+					embedErrors.Add(
+						String.Format(
+							CultureInfo.InvariantCulture,
+							"Invalid embed colour: {0}",
+							embed.Colour));
+
+			if (embed.Author != null && String.IsNullOrWhiteSpace(embed.Author.Name))
+			{
+				embedErrors.Add("Null or whitespace embed author name!");
+				embed.Author = null;
+			}
+
+			List<IEmbedField>? fields = null;
+			if (embed.Fields != null)
+			{
+				fields = new List<IEmbedField>();
+				var i = -1;
+				foreach (var field in embed.Fields)
+				{
+					++i;
+					var invalid = false;
+					if (String.IsNullOrWhiteSpace(field.Name))
+					{
+						embedErrors.Add(
+							String.Format(
+								CultureInfo.InvariantCulture,
+								"Null or whitespace field name at index {0}!",
+								i));
+						invalid = true;
+					}
+
+					if (String.IsNullOrWhiteSpace(field.Value))
+					{
+						embedErrors.Add(
+							String.Format(
+								CultureInfo.InvariantCulture,
+								"Null or whitespace field value at index {0}!",
+								i));
+						invalid = true;
+					}
+
+					if (invalid)
+						continue;
+
+					fields.Add(new EmbedField(field.Name!, field.Value!)
+					{
+						IsInline = field.IsInline ?? default(Optional<bool>),
+					});
+				}
+			}
+
+			if (embed.Footer != null && String.IsNullOrWhiteSpace(embed.Footer.Text))
+			{
+				embedErrors.Add("Null or whitespace embed footer text!");
+				embed.Footer = null;
+			}
+
+			if (embed.Image != null && String.IsNullOrWhiteSpace(embed.Image.Url))
+			{
+				embedErrors.Add("Null or whitespace embed image url!");
+				embed.Image = null;
+			}
+
+			if (embed.Thumbnail != null && String.IsNullOrWhiteSpace(embed.Thumbnail.Url))
+			{
+				embedErrors.Add("Null or whitespace embed thumbnail url!");
+				embed.Thumbnail = null;
+			}
+
+			Optional<DateTimeOffset> timestampOptional = default;
+			if (embed.Timestamp != null)
+				if (DateTimeOffset.TryParse(embed.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var timestamp))
+					timestampOptional = timestamp.ToUniversalTime();
+				else
+					embedErrors.Add(
+						String.Format(
+							CultureInfo.InvariantCulture,
+							"Invalid embed timestamp: {0}",
+							embed.Timestamp));
+
+			var discordEmbed = new Embed
+			{
+				Author = embed.Author != null
+					? new EmbedAuthor(embed.Author.Name!)
+					{
+						IconUrl = embed.Author.IconUrl ?? default(Optional<string>),
+						ProxyIconUrl = embed.Author.ProxyIconUrl ?? default(Optional<string>),
+						Url = embed.Author.Url ?? default(Optional<string>),
+					}
+					: default(Optional<IEmbedAuthor>),
+				Colour = colour,
+				Description = embed.Description ?? default(Optional<string>),
+				Fields = fields ?? default(Optional<IReadOnlyList<IEmbedField>>),
+				Footer = embed.Footer != null
+					? (Optional<IEmbedFooter>)new EmbedFooter(embed.Footer.Text!)
+					{
+						IconUrl = embed.Footer.IconUrl ?? default(Optional<string>),
+						ProxyIconUrl = embed.Footer.ProxyIconUrl ?? default(Optional<string>),
+					}
+					: default,
+				Image = embed.Image != null
+					? new EmbedImage(embed.Image.Url!)
+					{
+						Width = embed.Image.Width ?? default(Optional<int>),
+						Height = embed.Image.Height ?? default(Optional<int>),
+						ProxyUrl = embed.Image.ProxyUrl ?? default(Optional<string>),
+					}
+					: default(Optional<IEmbedImage>),
+				Provider = embed.Provider != null
+					? new EmbedProvider
+					{
+						Name = embed.Provider.Name ?? default(Optional<string>),
+						Url = embed.Provider.Url ?? default(Optional<string>),
+					}
+					: default(Optional<IEmbedProvider>),
+				Thumbnail = embed.Thumbnail != null
+					? new EmbedThumbnail(embed.Thumbnail.Url!)
+					{
+						Width = embed.Thumbnail.Width ?? default(Optional<int>),
+						Height = embed.Thumbnail.Height ?? default(Optional<int>),
+						ProxyUrl = embed.Thumbnail.ProxyUrl ?? default(Optional<string>),
+					}
+					: default(Optional<IEmbedThumbnail>),
+				Timestamp = timestampOptional,
+				Title = embed.Title ?? default(Optional<string>),
+				Url = embed.Url ?? default(Optional<string>),
+				Video = embed.Video != null
+					? new EmbedVideo
+					{
+						Url = embed.Video.Url ?? default(Optional<string>),
+						Width = embed.Video.Width ?? default(Optional<int>),
+						Height = embed.Video.Height ?? default(Optional<int>),
+						ProxyUrl = embed.Video.ProxyUrl ?? default(Optional<string>),
+					}
+					: default(Optional<IEmbedVideo>),
+			};
+
+			var result = new List<IEmbed> { discordEmbed };
+
+			if (embedErrors.Count > 0)
+			{
+				var joinedErrors = String.Join(Environment.NewLine, embedErrors);
+				Logger.LogError("Embed description contains errors:{newLine}{issues}", Environment.NewLine, joinedErrors);
+				result.Add(new Embed
+				{
+					Title = "TGS Embed Errors",
+					Description = joinedErrors,
+					Colour = Color.Red,
+					Footer = new EmbedFooter("Please report this to your codebase's maintainers."),
+					Timestamp = DateTimeOffset.UtcNow,
+				});
+			}
+
+			return result;
+		}
+		#pragma warning restore CA1502
 	}
+#pragma warning restore CA1506
 }

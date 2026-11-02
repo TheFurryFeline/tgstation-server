@@ -1,7 +1,9 @@
 ﻿using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
 using System;
+using System.IO.Abstractions.TestingHelpers;
 using System.Threading.Tasks;
+
 using Tgstation.Server.Host.Core;
 using Tgstation.Server.Host.IO;
 using Tgstation.Server.Host.System;
@@ -14,14 +16,18 @@ namespace Tgstation.Server.Host.Tests
 	[TestClass]
 	public sealed class TestServerFactory
 	{
+		static readonly string[] cliArgs = ["General:SetupWizardMode=Never"];
+
 		[TestMethod]
-		public void TestContructor()
+		public void TestConstructor()
 		{
-			Assert.ThrowsException<ArgumentNullException>(() => new ServerFactory(null, null));
+			Assert.ThrowsExactly<ArgumentNullException>(() => new ServerFactory(null, null, null));
 			IAssemblyInformationProvider assemblyInformationProvider = Mock.Of<IAssemblyInformationProvider>();
-			Assert.ThrowsException<ArgumentNullException>(() => new ServerFactory(assemblyInformationProvider, null));
+			Assert.ThrowsExactly<ArgumentNullException>(() => new ServerFactory(assemblyInformationProvider, null, null));
 			IIOManager ioManager = Mock.Of<IIOManager>();
-			new ServerFactory(assemblyInformationProvider, ioManager);
+			Assert.ThrowsExactly<ArgumentNullException>(() => new ServerFactory(assemblyInformationProvider, ioManager, null));
+			var mockFileSystem = new MockFileSystem();
+			_ = new ServerFactory(assemblyInformationProvider, ioManager, mockFileSystem);
 		}
 
 		[TestMethod]
@@ -29,8 +35,9 @@ namespace Tgstation.Server.Host.Tests
 		{
 			var factory = Application.CreateDefaultServerFactory();
 
-			await Assert.ThrowsExceptionAsync<ArgumentNullException>(() => factory.CreateServer(null, null, default));
-			await factory.CreateServer(new[] { "General:SetupWizardMode=Never" }, null, default);
+			await Assert.ThrowsExactlyAsync<ArgumentNullException>(() => factory.CreateServer(null, null, default).AsTask());
+			var result = await factory.CreateServer(cliArgs, null, default);
+			Assert.IsNotNull(result);
 		}
 
 		[TestMethod]
@@ -39,9 +46,10 @@ namespace Tgstation.Server.Host.Tests
 			var factory = Application.CreateDefaultServerFactory();
 			const string Path = "/test";
 
-			await Assert.ThrowsExceptionAsync<ArgumentNullException>(() => factory.CreateServer(null, null, default));
-			await Assert.ThrowsExceptionAsync<ArgumentNullException>(() => factory.CreateServer(null, Path, default));
-			await factory.CreateServer(new[] { "General:SetupWizardMode=Never" }, Path, default);
+			await Assert.ThrowsExactlyAsync<ArgumentNullException>(() => factory.CreateServer(null, null, default).AsTask());
+			await Assert.ThrowsExactlyAsync<ArgumentNullException>(() => factory.CreateServer(null, Path, default).AsTask());
+			var result = await factory.CreateServer(cliArgs, Path, default);
+			Assert.IsNotNull(result);
 		}
 	}
 }

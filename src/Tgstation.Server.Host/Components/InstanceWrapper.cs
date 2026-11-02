@@ -1,99 +1,69 @@
-﻿using System;
-using System.Threading;
+﻿using System.Threading;
 using System.Threading.Tasks;
-using Tgstation.Server.Host.Components.Byond;
+
 using Tgstation.Server.Host.Components.Chat;
 using Tgstation.Server.Host.Components.Deployment;
+using Tgstation.Server.Host.Components.Engine;
 using Tgstation.Server.Host.Components.Repository;
 using Tgstation.Server.Host.Components.StaticFiles;
 using Tgstation.Server.Host.Components.Watchdog;
 using Tgstation.Server.Host.Models;
+using Tgstation.Server.Host.Utils;
 
 namespace Tgstation.Server.Host.Components
 {
 	/// <summary>
-	/// Warpper around a given <see cref="IInstance"/> with a <see cref="Dispose"/> <see cref="Action"/>.
+	/// <see cref="ReferenceCounter{TInstance}"/> for a given <see cref="IInstance"/>.
 	/// </summary>
-	sealed class InstanceWrapper : IInstanceReference
+	sealed class InstanceWrapper : ReferenceCounter<IInstance>, IInstanceReference
 	{
+		/// <summary>
+		/// Static counter for <see cref="Uid"/>.
+		/// </summary>
+		static ulong instanceWrapperInstances;
+
 		/// <inheritdoc />
-		public Guid Uid { get; }
+		public ulong Uid { get; }
+
+		/// <inheritdoc />
+		public IRepositoryManager RepositoryManager => Instance.RepositoryManager;
+
+		/// <inheritdoc />
+		public IEngineManager EngineManager => Instance.EngineManager;
+
+		/// <inheritdoc />
+		public IDreamMaker DreamMaker => Instance.DreamMaker;
+
+		/// <inheritdoc />
+		public IWatchdog Watchdog => Instance.Watchdog;
+
+		/// <inheritdoc />
+		public IChatManager Chat => Instance.Chat;
+
+		/// <inheritdoc />
+		public IConfiguration Configuration => Instance.Configuration;
 
 		/// <summary>
-		/// The <see langword="lock"/> object for <see cref="Dispose"/>.
+		/// Initializes a new instance of the <see cref="InstanceWrapper"/> class.
 		/// </summary>
-		readonly object disposeLock;
-
-		/// <summary>
-		/// The <see cref="Action"/> to take when <see cref="Dispose"/> is called.
-		/// </summary>
-		Action onDisposed;
-
-		/// <summary>
-		/// The <see cref="IInstance"/> calls are forwarded to.
-		/// </summary>
-		IInstanceCore actualInstance;
-
-		/// <summary>
-		/// Initializes a new instance of the <see cref="InstanceWrapper"/> <see langword="class"/>.
-		/// </summary>
-		/// <param name="actualInstance">The value of <see cref="actualInstance"/>.</param>
-		/// <param name="onDisposed">The value of <see cref="onDisposed"/>.</param>
-		public InstanceWrapper(IInstanceCore actualInstance, Action onDisposed)
+		public InstanceWrapper()
 		{
-			this.actualInstance = actualInstance ?? throw new ArgumentNullException(nameof(actualInstance));
-			this.onDisposed = onDisposed ?? throw new ArgumentNullException(nameof(onDisposed));
-			Uid = Guid.NewGuid();
-			disposeLock = new object();
+			Uid = Interlocked.Increment(ref instanceWrapperInstances);
 		}
 
 		/// <inheritdoc />
-		public void Dispose()
-		{
-			lock (disposeLock)
-			{
-				onDisposed?.Invoke();
-				onDisposed = null;
-				actualInstance = null;
-			}
-		}
+		public ValueTask InstanceRenamed(string newInstanceName, CancellationToken cancellationToken) => Instance.InstanceRenamed(newInstanceName, cancellationToken);
 
 		/// <inheritdoc />
-		public IRepositoryManager RepositoryManager => actualInstance?.RepositoryManager ?? throw new ObjectDisposedException(nameof(InstanceWrapper));
+		public ValueTask ScheduleAutoUpdate(uint newInterval, string? newCron) => Instance.ScheduleAutoUpdate(newInterval, newCron);
 
 		/// <inheritdoc />
-		public IByondManager ByondManager => actualInstance?.ByondManager ?? throw new ObjectDisposedException(nameof(InstanceWrapper));
+		public ValueTask<CompileJob?> LatestCompileJob() => Instance.LatestCompileJob();
 
 		/// <inheritdoc />
-		public IDreamMaker DreamMaker => actualInstance?.DreamMaker ?? throw new ObjectDisposedException(nameof(InstanceWrapper));
+		public ValueTask ScheduleServerStart(string? newCron) => Instance.ScheduleServerStart(newCron);
 
 		/// <inheritdoc />
-		public IWatchdog Watchdog => actualInstance?.Watchdog ?? throw new ObjectDisposedException(nameof(InstanceWrapper));
-
-		/// <inheritdoc />
-		public IChatManager Chat => actualInstance?.Chat ?? throw new ObjectDisposedException(nameof(InstanceWrapper));
-
-		/// <inheritdoc />
-		public IConfiguration Configuration => actualInstance?.Configuration ?? throw new ObjectDisposedException(nameof(InstanceWrapper));
-
-		/// <inheritdoc />
-		public Task InstanceRenamed(string newInstanceName, CancellationToken cancellationToken)
-			=> actualInstance?.InstanceRenamed(newInstanceName, cancellationToken) ?? throw new ObjectDisposedException(nameof(InstanceWrapper));
-
-		/// <inheritdoc />
-		public CompileJob LatestCompileJob()
-		{
-			if (actualInstance == null)
-				throw new ObjectDisposedException(nameof(InstanceWrapper));
-			return actualInstance.LatestCompileJob();
-		}
-
-		/// <inheritdoc />
-		public Task SetAutoUpdateInterval(uint newInterval)
-		{
-			if (actualInstance == null)
-				throw new ObjectDisposedException(nameof(InstanceWrapper));
-			return actualInstance.SetAutoUpdateInterval(newInterval);
-		}
+		public ValueTask ScheduleServerStop(string? newCron) => Instance.ScheduleServerStop(newCron);
 	}
 }
